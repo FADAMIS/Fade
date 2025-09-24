@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+pub mod gyro;
 pub mod led;
 pub mod usb;
 
