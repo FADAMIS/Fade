@@ -81,7 +81,11 @@ fn main() -> ! {
         if counter % 10000 == 0 {
             let mut buf: String<64> = String::new();
             if let Ok(gyro) = gyro_manager.read_gyro() {
-                let _ = write!(buf, "Gyro: {:?}", gyro);
+                let _ = write!(
+                    buf,
+                    "Angle: roll {:.1}, pitch {:.1}, yaw {:.1}",
+                    gyro[0], gyro[1], gyro[2]
+                );
                 usb_manager.write_string(&buf).ok();
             }
         }

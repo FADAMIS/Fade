@@ -48,10 +48,8 @@ where
         let mut delay = DelayCompat(delay);
 
         mpu.reset(&mut delay).ok();
-        delay.delay_ms(100u32);
-
         mpu.set_sleep(false).ok();
-        mpu.set_clock_source(ClockSource::PLLGyroZ).ok();
+        mpu.set_clock_source(ClockSource::PLLGyroX).ok();
         mpu.set_accelerometer_sensitive(AccelerometerSensitive::Sensitive16384)
             .ok();
         mpu.set_gyro_sensitive(GyroSensitive::Sensitive65_5).ok();
@@ -59,8 +57,14 @@ where
         Self { mpu, delay }
     }
 
-    pub fn read_gyro(&mut self) -> Result<[i16; 3], E> {
-        self.mpu.read_gyro().map(|g| g.0)
+    pub fn read_gyro(&mut self) -> Result<[f32; 3], E> {
+        let raw = self.mpu.read_gyro()?;
+        let scale = 65.5;
+        Ok([
+            raw.0[0] as f32 / scale,
+            raw.0[1] as f32 / scale,
+            raw.0[2] as f32 / scale,
+        ])
     }
 
     pub fn read_accel(&mut self) -> Result<[i16; 3], E> {
