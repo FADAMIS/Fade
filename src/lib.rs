@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
 
+pub mod filters;
 pub mod gyro;
 pub mod led;
+pub mod pid;
 pub mod usb;
 
 use stm32f7xx_hal as _;
