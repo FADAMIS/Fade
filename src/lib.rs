@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+pub mod board_config;
 pub mod config;
 pub mod filters;
 pub mod gyro;

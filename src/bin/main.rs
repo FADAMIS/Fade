@@ -2,7 +2,8 @@
 #![no_main]
 
 use fade as _;
-use fade::config;
+use fade::board_config;
+
 use fade::filters::GyroFilter;
 use fade::gyro::GyroManager;
 use fade::led::LedManager;
@@ -16,7 +17,7 @@ use mpu6000::bus::SpiBus;
 use mpu6000::MPU6000;
 use mpu6000::SPI_MODE;
 
-use config::hal;
+use board_config::hal;
 use hal::pac;
 use hal::prelude::*;
 
@@ -36,7 +37,7 @@ fn main() -> ! {
     let dl = cp.SYST.delay(&clocks);
     let dl2 = dp.TIM2.delay_us(&clocks);
 
-    let pins = config::setup_pins(dp.GPIOA, dp.GPIOB);
+    let pins = board_config::setup_pins(dp.GPIOA, dp.GPIOB);
 
     let spi = hal::spi::Spi::new(dp.SPI1, (pins.sck, pins.miso, pins.mosi)).enable(
         SPI_MODE,
@@ -64,9 +65,9 @@ fn main() -> ! {
     let mut msp_manager = MspManager::new();
 
     let mut pid_controllers = PidControllers::new(8000.0); // Match your sample rate
-    pid_controllers.set_gains(Axis::Pitch, 0.4, 0.05, 0.02); // I: 0.3 → 0.05
-    pid_controllers.set_gains(Axis::Roll, 0.4, 0.05, 0.02); // I: 0.3 → 0.05
-    pid_controllers.set_gains(Axis::Yaw, 0.5, 0.02, 0.0); // I: 0.1 → 0.02
+    pid_controllers.set_gains(Axis::Pitch, 0.4, 0.05, 0.2);
+    pid_controllers.set_gains(Axis::Roll, 0.4, 0.05, 0.2);
+    pid_controllers.set_gains(Axis::Yaw, 0.5, 0.02, 0.0);
     pid_controllers.set_output_limits(100.0); // Reasonable limit
 
     pid_controllers.set_derivative_lpf(50.0, 8000.0);

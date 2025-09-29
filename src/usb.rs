@@ -1,5 +1,5 @@
-use crate::config::hal;
-use crate::config::{UsbDmPin, UsbDpPin};
+use crate::board_config::hal;
+use crate::board_config::{UsbDmPin, UsbDpPin};
 use hal::otg_fs::{UsbBus, USB};
 use hal::pac::{OTG_FS_DEVICE, OTG_FS_GLOBAL, OTG_FS_PWRCLK};
 use hal::rcc::Clocks;
