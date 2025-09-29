@@ -16,6 +16,7 @@ const MSP_PID: u16 = 112;
 // I will invent some commands for gyro and pid corrections, as they are not standard
 const MSP_GYRO: u16 = 2000;
 const MSP_PID_CORR: u16 = 2001;
+const MSP_SAVE_SETTINGS: u16 = 2002;
 
 #[derive(Debug)]
 pub struct MspFrame {
@@ -254,6 +255,15 @@ impl MspManager {
                             payload[4..8].copy_from_slice(&y_bytes);
                             payload[8..12].copy_from_slice(&z_bytes);
                             let response = MspFrame::new(MSP_PID_CORR, &payload);
+                            let mut out_buffer = [0u8; 256];
+                            if let Ok(len) = response.serialize(&mut out_buffer) {
+                                usb.write_bytes(&out_buffer[..len]).ok();
+                            }
+                        }
+                        MSP_SAVE_SETTINGS => {
+                            // TODO: Implement settings saving functionality
+                            // For now, just send an empty response to acknowledge the command
+                            let response = MspFrame::new(MSP_SAVE_SETTINGS, &[]);
                             let mut out_buffer = [0u8; 256];
                             if let Ok(len) = response.serialize(&mut out_buffer) {
                                 usb.write_bytes(&out_buffer[..len]).ok();
