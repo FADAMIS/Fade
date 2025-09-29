@@ -3,6 +3,7 @@
 
 use core::fmt::Write;
 use fade as _;
+use fade::config;
 use fade::filters::GyroFilter;
 use fade::gyro::GyroManager;
 use fade::led::LedManager;
@@ -11,20 +12,14 @@ use fade::pid::PidControllers;
 use fade::pid::Vector3;
 use fade::usb::UsbManager;
 use fugit::RateExtU32;
-use hal::pac;
 use heapless::String;
 use mpu6000::bus::SpiBus;
 use mpu6000::MPU6000;
 use mpu6000::SPI_MODE;
-use stm32f7xx_hal::rcc::PLL48CLK;
-use stm32f7xx_hal::spi::Spi;
 
-use stm32f7xx_hal::{
-    self as hal,
-    gpio::GpioExt,
-    rcc::RccExt,
-    timer::{SysTimerExt, TimerExt},
-};
+use config::hal;
+use hal::pac;
+use hal::prelude::*;
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -34,7 +29,7 @@ fn main() -> ! {
     let mut rcc = dp.RCC.constrain();
     let clocks = rcc
         .cfgr
-        .use_pll48clk(PLL48CLK::Pllq)
+        .use_pll48clk(hal::rcc::PLL48CLK::Pllq)
         .sysclk(RateExtU32::MHz(216))
         .use_pll()
         .freeze();
@@ -42,24 +37,16 @@ fn main() -> ! {
     let dl = cp.SYST.delay(&clocks);
     let dl2 = dp.TIM2.delay_us(&clocks);
 
-    let gpioa = dp.GPIOA.split();
-    let gpiob = dp.GPIOB.split();
-    let led_pin = gpioa.pa14.into_push_pull_output();
-    let pin_dm = gpioa.pa11.into_alternate();
-    let pin_dp = gpioa.pa12.into_alternate();
-    let pin_sck = gpioa.pa5.into_alternate::<5>();
-    let pin_miso = gpioa.pa6.into_alternate::<5>();
-    let pin_mosi = gpioa.pa7.into_alternate::<5>();
-    let pin_cs = gpiob.pb2.into_push_pull_output();
+    let pins = config::setup_pins(dp.GPIOA, dp.GPIOB);
 
-    let spi = Spi::new(dp.SPI1, (pin_sck, pin_miso, pin_mosi)).enable(
+    let spi = hal::spi::Spi::new(dp.SPI1, (pins.sck, pins.miso, pins.mosi)).enable(
         SPI_MODE,
         RateExtU32::MHz(8),
         &clocks,
         &mut rcc.apb2,
     );
 
-    let spi_bus = SpiBus::new(spi, pin_cs, dl);
+    let spi_bus = SpiBus::new(spi, pins.cs, dl);
 
     let mpu6000 = MPU6000::new(spi_bus);
 
@@ -69,33 +56,33 @@ fn main() -> ! {
         dp.OTG_FS_GLOBAL,
         dp.OTG_FS_DEVICE,
         dp.OTG_FS_PWRCLK,
-        pin_dm,
-        pin_dp,
+        pins.usb_dm,
+        pins.usb_dp,
         &clocks,
     );
 
-    let mut led_manager = LedManager::new(led_pin);
+    let mut led_manager = LedManager::new(pins.led);
 
     let mut _counter = 0;
 
-    let mut pid_controllers = PidControllers::new(1000.0); // Match your sample rate
+    let mut pid_controllers = PidControllers::new(8000.0); // Match your sample rate
     pid_controllers.set_gains(Axis::Pitch, 0.4, 0.05, 0.02); // I: 0.3 → 0.05
     pid_controllers.set_gains(Axis::Roll, 0.4, 0.05, 0.02); // I: 0.3 → 0.05
     pid_controllers.set_gains(Axis::Yaw, 0.5, 0.02, 0.0); // I: 0.1 → 0.02
     pid_controllers.set_output_limits(100.0); // Reasonable limit
 
-    pid_controllers.set_derivative_lpf(50.0, 1000.0);
+    pid_controllers.set_derivative_lpf(50.0, 8000.0);
 
-    let mut gyro_filter = GyroFilter::new(1000.0);
-    gyro_filter.setup_lowpass1(1000.0, 200.0);
-    gyro_filter.setup_lowpass2(1000.0, 100.0);
+    let mut gyro_filter = GyroFilter::new(8000.0);
+    gyro_filter.setup_lowpass1(8000.0, 200.0);
+    gyro_filter.setup_lowpass2(8000.0, 100.0);
     gyro_filter.set_calibration_params(
         300,    // samples
         2.0,    // threshold (deg/s)
         0.5,    // deadband (deg/s)
         200.0,  // stability_time_ms
         1000.0, // startup_delay_ms
-        1000.0, // sample_rate
+        8000.0, // sample_rate
     );
 
     let rate_setpoint = Vector3 {

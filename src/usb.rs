@@ -1,7 +1,8 @@
-use stm32f7xx_hal::gpio::{Alternate, Pin};
-use stm32f7xx_hal::otg_fs::{UsbBus, USB};
-use stm32f7xx_hal::pac::{OTG_FS_DEVICE, OTG_FS_GLOBAL, OTG_FS_PWRCLK};
-use stm32f7xx_hal::rcc::Clocks;
+use crate::config::hal;
+use crate::config::{UsbDmPin, UsbDpPin};
+use hal::otg_fs::{UsbBus, USB};
+use hal::pac::{OTG_FS_DEVICE, OTG_FS_GLOBAL, OTG_FS_PWRCLK};
+use hal::rcc::Clocks;
 use usb_device::class_prelude::UsbBusAllocator;
 use usb_device::prelude::*;
 use usbd_serial::SerialPort;
@@ -22,8 +23,8 @@ impl UsbManager {
         usb_global: OTG_FS_GLOBAL,
         usb_device: OTG_FS_DEVICE,
         usb_pwrclk: OTG_FS_PWRCLK,
-        pin_dm: Pin<'A', 11, Alternate<10>>,
-        pin_dp: Pin<'A', 12, Alternate<10>>,
+        pin_dm: UsbDmPin,
+        pin_dp: UsbDpPin,
         clocks: &Clocks,
     ) -> Self {
         // Create USB peripheral
