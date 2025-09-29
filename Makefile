@@ -25,7 +25,7 @@ release:
 # Flash firmware using dfu-util and verify USB connection
 flash: build
 	@echo "Flashing firmware..."
-	@dfu-util -a 0 -s 0x08000000 -D firm.bin
+	@dfu-util -a 0 -s 0x08000000:leave -D firm.bin
 	@echo "Firmware flashed successfully!"
 
 
