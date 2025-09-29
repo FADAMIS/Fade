@@ -79,4 +79,9 @@ impl UsbManager {
     pub fn write_bytes(&mut self, data: &[u8]) -> Result<usize, usb_device::UsbError> {
         self.serial.write(data)
     }
+
+    /// Read bytes from USB
+    pub fn read_bytes(&mut self, data: &mut [u8]) -> Result<usize, usb_device::UsbError> {
+        self.serial.read(data)
+    }
 }

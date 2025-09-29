@@ -1,18 +1,17 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
 use fade as _;
 use fade::config;
 use fade::filters::GyroFilter;
 use fade::gyro::GyroManager;
 use fade::led::LedManager;
+use fade::msp::MspManager;
 use fade::pid::Axis;
 use fade::pid::PidControllers;
 use fade::pid::Vector3;
 use fade::usb::UsbManager;
 use fugit::RateExtU32;
-use heapless::String;
 use mpu6000::bus::SpiBus;
 use mpu6000::MPU6000;
 use mpu6000::SPI_MODE;
@@ -62,8 +61,7 @@ fn main() -> ! {
     );
 
     let mut led_manager = LedManager::new(pins.led);
-
-    let mut _counter = 0;
+    let mut msp_manager = MspManager::new();
 
     let mut pid_controllers = PidControllers::new(8000.0); // Match your sample rate
     pid_controllers.set_gains(Axis::Pitch, 0.4, 0.05, 0.02); // I: 0.3 → 0.05
@@ -95,8 +93,6 @@ fn main() -> ! {
         usb_manager.poll();
         led_manager.update();
 
-        let mut buf: String<128> = String::new(); // Bigger buffer for more data
-
         if let Ok(gyro) = gyro_manager.read_gyro() {
             let filtered_gyro = gyro_filter.update(gyro);
             let filtered_gyro_vect = Vector3 {
@@ -112,31 +108,12 @@ fn main() -> ! {
                 0.0, // throttle (0.0 = no TPA effect)
             );
 
-            if gyro_filter.is_waiting_for_stability() {
-                let _ = write!(buf, "Waiting for stability...");
-                usb_manager.write_string(&buf).ok();
-            } else if gyro_filter.is_calibrating() {
-                let _ = write!(
-                    buf,
-                    "Calibration Progress: {:.1}%",
-                    gyro_filter.get_calibration_progress()
-                );
-                usb_manager.write_string(&buf).ok();
-            } else {
-                // Display both gyro readings AND PID corrections
-                let _ = write!(
-                    buf,
-                    "Gyro R:{:.1} P:{:.1} Y:{:.1} | PID R:{:.1} P:{:.1} Y:{:.1}",
-                    filtered_gyro_vect.x,
-                    filtered_gyro_vect.y,
-                    filtered_gyro_vect.z,
-                    pid_correction.x,
-                    pid_correction.y,
-                    pid_correction.z
-                );
-                usb_manager.write_string(&buf).ok();
-            }
+            msp_manager.handle_msp(
+                &mut usb_manager,
+                &mut pid_controllers,
+                &filtered_gyro_vect,
+                &pid_correction,
+            );
         }
-        _counter += 1;
     }
 }

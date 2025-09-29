@@ -318,6 +318,14 @@ impl PidControllers {
         // Yaw typically stays in rate mode
     }
 
+    pub fn get_gains(&self) -> [(f32, f32, f32); 3] {
+        [
+            (self.roll.kp, self.roll.ki, self.roll.kd),
+            (self.pitch.kp, self.pitch.ki, self.pitch.kd),
+            (self.yaw.kp, self.yaw.ki, self.yaw.kd),
+        ]
+    }
+
     pub fn reset(&mut self) {
         self.roll.reset();
         self.pitch.reset();

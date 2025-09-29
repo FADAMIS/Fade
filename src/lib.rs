@@ -5,6 +5,7 @@ pub mod config;
 pub mod filters;
 pub mod gyro;
 pub mod led;
+pub mod msp;
 pub mod pid;
 pub mod usb;
 
