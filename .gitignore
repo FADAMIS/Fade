@@ -1,6 +1,5 @@
 /target
 Cargo.lock
-/tests
 /.vscode
 /.github
 /.ropeproject
