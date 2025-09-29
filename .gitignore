@@ -1,2 +1,7 @@
 /target
 Cargo.lock
+/tests
+/.vscode
+/.github
+/.ropeproject
+/firm.bin
