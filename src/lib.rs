@@ -1,16 +1,12 @@
 #![no_std]
 #![no_main]
 
-pub mod board_config;
-pub mod config;
 pub mod filters;
 pub mod gyro;
-pub mod led;
 pub mod msp;
 pub mod pid;
-pub mod usb;
 
-use stm32f7xx_hal as _;
+use embassy_stm32 as _;
 
 use defmt_rtt as _; // global logger
 

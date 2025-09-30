@@ -1,7 +1,6 @@
 // src/msp.rs
 
 use crate::pid::{Axis, PidControllers, Vector3};
-use crate::usb::UsbManager;
 use heapless::Vec;
 
 // MSPv2 protocol constants
@@ -65,7 +64,7 @@ enum ParserState {
     Direction,
     Flag,
     Command1,
-    #[allow(unused)]
+    #[allow(dead_code)]
     Command2,
     PayloadSize1,
     PayloadSize2,
@@ -129,6 +128,10 @@ impl MspParser {
                 self.checksum ^= byte;
                 self.state = ParserState::PayloadSize1;
             }
+            ParserState::Command2 => {
+                // This state should not be reached with the corrected logic
+                self.state = ParserState::Idle;
+            }
             ParserState::PayloadSize1 => {
                 self.payload_size = byte as u16;
                 self.checksum ^= byte;
@@ -165,10 +168,6 @@ impl MspParser {
                     self.state = ParserState::Idle;
                 }
             }
-            ParserState::Command2 => {
-                // This state should not be reached with the corrected logic, but we handle it to satisfy the compiler.
-                self.state = ParserState::Idle;
-            }
         }
         None
     }
@@ -187,92 +186,80 @@ impl MspManager {
 
     pub fn handle_msp(
         &mut self,
-        usb: &mut UsbManager,
+        data: &[u8],
         pids: &mut PidControllers,
         gyro: &Vector3,
         pid_corr: &Vector3,
-    ) {
-        let mut buffer = [0u8; 256];
-        if let Ok(count) = usb.read_bytes(&mut buffer) {
-            for i in 0..count {
-                if let Some(frame) = self.parser.parse(buffer[i]) {
-                    match frame.command {
-                        MSP_SET_PID => {
-                            if frame.payload.len() >= 4 * 9 {
-                                let mut data = [0.0f32; 9];
-                                for i in 0..9 {
-                                    let bytes = [
-                                        frame.payload[i * 4],
-                                        frame.payload[i * 4 + 1],
-                                        frame.payload[i * 4 + 2],
-                                        frame.payload[i * 4 + 3],
-                                    ];
-                                    data[i] = f32::from_le_bytes(bytes);
-                                }
-                                pids.set_gains(Axis::Roll, data[0], data[1], data[2]);
-                                pids.set_gains(Axis::Pitch, data[3], data[4], data[5]);
-                                pids.set_gains(Axis::Yaw, data[6], data[7], data[8]);
+    ) -> Vec<MspFrame, 8> {
+        let mut responses = Vec::new();
+
+        for &byte in data {
+            if let Some(frame) = self.parser.parse(byte) {
+                match frame.command {
+                    MSP_SET_PID => {
+                        if frame.payload.len() >= 4 * 9 {
+                            let mut data = [0.0f32; 9];
+                            for i in 0..9 {
+                                let bytes = [
+                                    frame.payload[i * 4],
+                                    frame.payload[i * 4 + 1],
+                                    frame.payload[i * 4 + 2],
+                                    frame.payload[i * 4 + 3],
+                                ];
+                                data[i] = f32::from_le_bytes(bytes);
                             }
+                            pids.set_gains(Axis::Roll, data[0], data[1], data[2]);
+                            pids.set_gains(Axis::Pitch, data[3], data[4], data[5]);
+                            pids.set_gains(Axis::Yaw, data[6], data[7], data[8]);
                         }
-                        MSP_PID => {
-                            let gains = pids.get_gains();
-                            let mut payload = [0u8; 4 * 9];
-                            for idx in 0..3 {
-                                let (p, i, d) = gains[idx];
-                                let p_bytes = p.to_le_bytes();
-                                let i_bytes = i.to_le_bytes();
-                                let d_bytes = d.to_le_bytes();
-                                payload[idx * 12..idx * 12 + 4].copy_from_slice(&p_bytes);
-                                payload[idx * 12 + 4..idx * 12 + 8].copy_from_slice(&i_bytes);
-                                payload[idx * 12 + 8..idx * 12 + 12].copy_from_slice(&d_bytes);
-                            }
-                            let response = MspFrame::new(MSP_PID, &payload);
-                            let mut out_buffer = [0u8; 256];
-                            if let Ok(len) = response.serialize(&mut out_buffer) {
-                                usb.write_bytes(&out_buffer[..len]).ok();
-                            }
-                        }
-                        MSP_GYRO => {
-                            let mut payload = [0u8; 12];
-                            let x_bytes = gyro.x.to_le_bytes();
-                            let y_bytes = gyro.y.to_le_bytes();
-                            let z_bytes = gyro.z.to_le_bytes();
-                            payload[0..4].copy_from_slice(&x_bytes);
-                            payload[4..8].copy_from_slice(&y_bytes);
-                            payload[8..12].copy_from_slice(&z_bytes);
-                            let response = MspFrame::new(MSP_GYRO, &payload);
-                            let mut out_buffer = [0u8; 256];
-                            if let Ok(len) = response.serialize(&mut out_buffer) {
-                                usb.write_bytes(&out_buffer[..len]).ok();
-                            }
-                        }
-                        MSP_PID_CORR => {
-                            let mut payload = [0u8; 12];
-                            let x_bytes = pid_corr.x.to_le_bytes();
-                            let y_bytes = pid_corr.y.to_le_bytes();
-                            let z_bytes = pid_corr.z.to_le_bytes();
-                            payload[0..4].copy_from_slice(&x_bytes);
-                            payload[4..8].copy_from_slice(&y_bytes);
-                            payload[8..12].copy_from_slice(&z_bytes);
-                            let response = MspFrame::new(MSP_PID_CORR, &payload);
-                            let mut out_buffer = [0u8; 256];
-                            if let Ok(len) = response.serialize(&mut out_buffer) {
-                                usb.write_bytes(&out_buffer[..len]).ok();
-                            }
-                        }
-                        MSP_SAVE_SETTINGS => {
-                            // TODO: Implement settings saving functionality
-                            // For now, just send an empty response to acknowledge the command
-                            let response = MspFrame::new(MSP_SAVE_SETTINGS, &[]);
-                            let mut out_buffer = [0u8; 256];
-                            if let Ok(len) = response.serialize(&mut out_buffer) {
-                                usb.write_bytes(&out_buffer[..len]).ok();
-                            }
-                        }
-                        _ => {}
                     }
+                    MSP_PID => {
+                        let gains = pids.get_gains();
+                        let mut payload = [0u8; 4 * 9];
+                        for idx in 0..3 {
+                            let (p, i, d) = gains[idx];
+                            let p_bytes = p.to_le_bytes();
+                            let i_bytes = i.to_le_bytes();
+                            let d_bytes = d.to_le_bytes();
+                            payload[idx * 12..idx * 12 + 4].copy_from_slice(&p_bytes);
+                            payload[idx * 12 + 4..idx * 12 + 8].copy_from_slice(&i_bytes);
+                            payload[idx * 12 + 8..idx * 12 + 12].copy_from_slice(&d_bytes);
+                        }
+                        let response = MspFrame::new(MSP_PID, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_GYRO => {
+                        let mut payload = [0u8; 12];
+                        let x_bytes = gyro.x.to_le_bytes();
+                        let y_bytes = gyro.y.to_le_bytes();
+                        let z_bytes = gyro.z.to_le_bytes();
+                        payload[0..4].copy_from_slice(&x_bytes);
+                        payload[4..8].copy_from_slice(&y_bytes);
+                        payload[8..12].copy_from_slice(&z_bytes);
+                        let response = MspFrame::new(MSP_GYRO, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_PID_CORR => {
+                        let mut payload = [0u8; 12];
+                        let x_bytes = pid_corr.x.to_le_bytes();
+                        let y_bytes = pid_corr.y.to_le_bytes();
+                        let z_bytes = pid_corr.z.to_le_bytes();
+                        payload[0..4].copy_from_slice(&x_bytes);
+                        payload[4..8].copy_from_slice(&y_bytes);
+                        payload[8..12].copy_from_slice(&z_bytes);
+                        let response = MspFrame::new(MSP_PID_CORR, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SAVE_SETTINGS => {
+                        // TODO: Implement settings saving functionality
+                        // For now, just send an empty response to acknowledge the command
+                        let response = MspFrame::new(MSP_SAVE_SETTINGS, &[]);
+                        responses.push(response).ok();
+                    }
+                    _ => {}
                 }
             }
         }
+        responses
     }
 }

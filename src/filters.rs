@@ -222,7 +222,7 @@ impl GyroFilter {
             stability_buffer_full: false,
             min_stability_time: 100, // Must be stable for 100 samples (100ms at 1kHz)
             stability_counter: 0,
-            max_sample_deviation: 0.3, // Max 0.3 deg/s deviation between samples
+            max_sample_deviation: 1.0, // Max 1.0 deg/s deviation between samples (more lenient)
 
             // Startup delay - ignore first 500ms of data
             startup_delay: (sample_rate * 0.5) as u32, // 500ms delay
@@ -303,38 +303,81 @@ impl GyroFilter {
         }
     }
 
+    /// Set manual bias values and mark as calibrated (for testing or known values)
+    pub fn set_manual_bias(&mut self, bias: [f32; 3]) {
+        self.bias = bias;
+        self.calibrated = true;
+        self.calibrating = false;
+
+        // Reset all filters
+        if self.lowpass1_enabled {
+            self.lowpass1.reset();
+        }
+        if self.lowpass2_enabled {
+            self.lowpass2.reset();
+        }
+        if self.notch1_enabled {
+            self.notch1.reset();
+        }
+        if self.notch2_enabled {
+            self.notch2.reset();
+        }
+        if self.static_notch_enabled {
+            self.static_notch.reset();
+        }
+    }
+
+    /// Skip calibration entirely and use zero bias (for testing)
+    pub fn skip_calibration(&mut self) {
+        self.set_manual_bias([0.0; 3]);
+    }
+
     /// Check if gyro readings are stable enough for calibration
-    fn is_stable(&self) -> bool {
-        if !self.stability_buffer_full {
-            return false;
+    fn is_stable(&self, current_sample: [f32; 3]) -> bool {
+        if !self.stability_buffer_full && self.stability_index < 5 {
+            return false; // Need at least 5 samples
         }
 
-        // Check if all recent samples are within acceptable deviation
-        let mut min_vals = self.stability_buffer[0];
-        let mut max_vals = self.stability_buffer[0];
+        // Check if current sample and recent samples are within acceptable deviation
+        let samples_to_check = if self.stability_buffer_full {
+            10
+        } else {
+            self.stability_index
+        };
 
-        for sample in &self.stability_buffer {
+        for i in 0..samples_to_check {
+            let sample = self.stability_buffer[i];
             for axis in 0..3 {
-                min_vals[axis] = min_vals[axis].min(sample[axis]);
-                max_vals[axis] = max_vals[axis].max(sample[axis]);
+                if (current_sample[axis] - sample[axis]).abs() > self.max_sample_deviation {
+                    return false;
+                }
             }
         }
 
-        // Check if range is within acceptable limits for all axes
-        for axis in 0..3 {
-            if (max_vals[axis] - min_vals[axis]) > self.max_sample_deviation {
-                return false;
-            }
-        }
-
-        true
+        // Also check that the overall magnitude is reasonable
+        let magnitude = current_sample
+            .iter()
+            .map(|v| v.abs())
+            .fold(0.0_f32, |a, b| a.max(b));
+        magnitude < self.calibration_threshold
     }
 
     pub fn update(&mut self, raw: [f32; 3]) -> [f32; 3] {
-        // Handle startup delay - ignore initial samples after power-on
+        // Handle startup delay - but still process and return filtered data
         if self.startup_counter < self.startup_delay {
             self.startup_counter += 1;
-            return [0.0; 3]; // Return zeros during startup delay
+            // During startup, use zero bias and apply filters
+            let mut corrected = raw;
+
+            // Apply basic filtering even during startup
+            if self.lowpass1_enabled {
+                corrected = self.lowpass1.apply(corrected);
+            }
+            if self.lowpass2_enabled {
+                corrected = self.lowpass2.apply(corrected);
+            }
+
+            return corrected;
         }
 
         // Add current sample to stability buffer
@@ -350,7 +393,7 @@ impl GyroFilter {
 
             // Basic magnitude check
             if magnitude < self.calibration_threshold {
-                if self.is_stable() {
+                if self.is_stable(raw) {
                     self.stability_counter += 1;
 
                     // Start calibration only after sustained stability
@@ -369,56 +412,50 @@ impl GyroFilter {
 
         // Perform calibration
         if self.calibrating {
-            // Double-check stability during calibration - abort if motion detected
+            // More lenient stability check during calibration
             let magnitude = raw.iter().map(|v| v.abs()).fold(0.0_f32, |a, b| a.max(b));
-            if magnitude > self.calibration_threshold * 2.0 {
-                // Allow some margin during calibration
+            if magnitude > self.calibration_threshold * 1.5 {
                 // Motion detected during calibration - abort and restart
                 self.calibrating = false;
                 self.calibration_count = 0;
                 self.calibration_sum = [0.0; 3];
                 self.stability_counter = 0;
-                return [0.0; 3];
-            }
-
-            for i in 0..3 {
-                self.calibration_sum[i] += raw[i];
-            }
-            self.calibration_count += 1;
-
-            if self.calibration_count >= self.calibration_samples {
+                // Don't return zeros, continue with current processing
+            } else {
+                // Continue calibration
                 for i in 0..3 {
-                    self.bias[i] = self.calibration_sum[i] / self.calibration_count as f32;
+                    self.calibration_sum[i] += raw[i];
                 }
-                self.calibrated = true;
-                self.calibrating = false;
+                self.calibration_count += 1;
 
-                // Reset all filters with the first bias-corrected sample
-                let first_corrected = [
-                    raw[0] - self.bias[0],
-                    raw[1] - self.bias[1],
-                    raw[2] - self.bias[2],
-                ];
+                if self.calibration_count >= self.calibration_samples {
+                    for i in 0..3 {
+                        self.bias[i] = self.calibration_sum[i] / self.calibration_count as f32;
+                    }
+                    self.calibrated = true;
+                    self.calibrating = false;
 
-                if self.lowpass1_enabled {
-                    self.lowpass1.reset();
-                    self.lowpass1.apply(first_corrected);
-                }
-                if self.lowpass2_enabled {
-                    self.lowpass2.reset();
-                    self.lowpass2.apply(first_corrected);
+                    // Reset all filters
+                    if self.lowpass1_enabled {
+                        self.lowpass1.reset();
+                    }
+                    if self.lowpass2_enabled {
+                        self.lowpass2.reset();
+                    }
+                    if self.notch1_enabled {
+                        self.notch1.reset();
+                    }
+                    if self.notch2_enabled {
+                        self.notch2.reset();
+                    }
+                    if self.static_notch_enabled {
+                        self.static_notch.reset();
+                    }
                 }
             }
-
-            return [0.0; 3]; // Return zeros during calibration
         }
 
-        // If not calibrated yet, return zeros
-        if !self.calibrated {
-            return [0.0; 3];
-        }
-
-        // Apply bias correction
+        // Apply bias correction (use current bias, even if still calibrating)
         let mut corrected = [
             raw[0] - self.bias[0],
             raw[1] - self.bias[1],
@@ -451,10 +488,12 @@ impl GyroFilter {
             corrected = self.lowpass2.apply(corrected);
         }
 
-        // Apply deadband
-        for i in 0..3 {
-            if corrected[i].abs() < self.deadband {
-                corrected[i] = 0.0;
+        // Apply deadband only if fully calibrated
+        if self.calibrated {
+            for i in 0..3 {
+                if corrected[i].abs() < self.deadband {
+                    corrected[i] = 0.0;
+                }
             }
         }
 
