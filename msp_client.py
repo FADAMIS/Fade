@@ -14,6 +14,7 @@ from textual.containers import Vertical, Horizontal
 MSP_PID = 112
 MSP_SET_PID = 202
 MSP_GYRO = 2000
+MSP_SAVE_SETTINGS = 2002
 
 def find_serial_port():
     """Finds the correct serial port for the STM32 device."""
@@ -89,6 +90,33 @@ def create_msp_set_pid_request(pids):
 
     return frame
 
+def create_msp_save_request():
+    """Creates an MSP_SAVE_SETTINGS request frame."""
+    flag = 0
+    payload_size = 0
+
+    frame = bytearray()
+    frame.append(ord('$'))
+    frame.append(ord('X'))
+    frame.append(ord('<'))
+
+    checksum = 0
+
+    frame.append(flag)
+    checksum ^= flag
+
+    frame.extend(struct.pack('<H', MSP_SAVE_SETTINGS))
+    checksum ^= (MSP_SAVE_SETTINGS & 0xFF)
+    checksum ^= ((MSP_SAVE_SETTINGS >> 8) & 0xFF)
+
+    frame.extend(struct.pack('<H', payload_size))
+    checksum ^= (payload_size & 0xFF)
+    checksum ^= ((payload_size >> 8) & 0xFF)
+
+    frame.append(checksum)
+
+    return frame
+
 def parse_msp_response(ser):
     """Parses an MSPv2 response frame."""
     try:
@@ -144,9 +172,10 @@ class PidWidget(Static):
         pitch = self.pid_data.get("pitch", {})
         yaw = self.pid_data.get("yaw", {})
         return (
-            f"Roll:  P={roll.get('p', 0):.2f}, I={roll.get('i', 0):.2f}, D={roll.get('d', 0):.2f}\\n"
-            f"Pitch: P={pitch.get('p', 0):.2f}, I={pitch.get('i', 0):.2f}, D={pitch.get('d', 0):.2f}\\n"
-            f"Yaw:   P={yaw.get('p', 0):.2f}, I={yaw.get('i', 0):.2f}, D={yaw.get('d', 0):.2f}"
+            f"Current PID Values:\n"
+            f"Roll:  P={roll.get('p', 1.0):.3f}, I={roll.get('i', 0.1):.3f}, D={roll.get('d', 0.01):.3f}\n"
+            f"Pitch: P={pitch.get('p', 1.0):.3f}, I={pitch.get('i', 0.1):.3f}, D={pitch.get('d', 0.01):.3f}\n"
+            f"Yaw:   P={yaw.get('p', 1.0):.3f}, I={yaw.get('i', 0.1):.3f}, D={yaw.get('d', 0.01):.3f}"
         )
 
 class MspDashboard(App):
@@ -184,7 +213,10 @@ class MspDashboard(App):
                     yield Input(placeholder="I", id="yaw_i", classes="pid-input")
                     yield Input(placeholder="D", id="yaw_d", classes="pid-input")
 
-            yield Button("Set PIDs", id="set_pids")
+            with Horizontal(id="buttons"):
+                yield Button("Set PIDs", id="set_pids")
+                yield Button("Save to Flash", id="save_pids")
+                yield Button("Load Defaults", id="load_defaults")
             yield Static("Not Connected", id="status")
         yield Footer()
 
@@ -198,35 +230,55 @@ class MspDashboard(App):
         self.msp_thread.start()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Called when the 'Set PIDs' button is pressed."""
+        """Handle button press events."""
         if event.button.id == "set_pids":
             try:
                 pids = {
                     "roll": {
-                        "p": float(self.query_one("#roll_p", Input).value or 0),
-                        "i": float(self.query_one("#roll_i", Input).value or 0),
-                        "d": float(self.query_one("#roll_d", Input).value or 0),
+                        "p": float(self.query_one("#roll_p", Input).value or 1.0),
+                        "i": float(self.query_one("#roll_i", Input).value or 0.1),
+                        "d": float(self.query_one("#roll_d", Input).value or 0.01),
                     },
                     "pitch": {
-                        "p": float(self.query_one("#pitch_p", Input).value or 0),
-                        "i": float(self.query_one("#pitch_i", Input).value or 0),
-                        "d": float(self.query_one("#pitch_d", Input).value or 0),
+                        "p": float(self.query_one("#pitch_p", Input).value or 1.0),
+                        "i": float(self.query_one("#pitch_i", Input).value or 0.1),
+                        "d": float(self.query_one("#pitch_d", Input).value or 0.01),
                     },
                     "yaw": {
-                        "p": float(self.query_one("#yaw_p", Input).value or 0),
-                        "i": float(self.query_one("#yaw_i", Input).value or 0),
-                        "d": float(self.query_one("#yaw_d", Input).value or 0),
+                        "p": float(self.query_one("#yaw_p", Input).value or 1.0),
+                        "i": float(self.query_one("#yaw_i", Input).value or 0.1),
+                        "d": float(self.query_one("#yaw_d", Input).value or 0.01),
                     },
                 }
 
                 if self.ser and self.ser.is_open:
                     self.ser.write(create_msp_set_pid_request(pids))
-                    self.query_one("#status", Static).update("Set PIDs command sent.")
+                    self.query_one("#status", Static).update("✅ Set PIDs command sent.")
                 else:
-                    self.query_one("#status", Static).update("Not connected. Cannot set PIDs.")
+                    self.query_one("#status", Static).update("❌ Not connected. Cannot set PIDs.")
 
             except ValueError:
-                self.query_one("#status", Static).update("Invalid PID values. Please enter numbers only.")
+                self.query_one("#status", Static).update("❌ Invalid PID values. Please enter numbers only.")
+
+        elif event.button.id == "save_pids":
+            if self.ser and self.ser.is_open:
+                self.ser.write(create_msp_save_request())
+                self.query_one("#status", Static).update("💾 Save PIDs to flash command sent.")
+            else:
+                self.query_one("#status", Static).update("❌ Not connected. Cannot save PIDs.")
+
+        elif event.button.id == "load_defaults":
+            # Load default values into input fields
+            self.query_one("#roll_p", Input).value = "1.0"
+            self.query_one("#roll_i", Input).value = "0.1"
+            self.query_one("#roll_d", Input).value = "0.01"
+            self.query_one("#pitch_p", Input).value = "1.0"
+            self.query_one("#pitch_i", Input).value = "0.1"
+            self.query_one("#pitch_d", Input).value = "0.01"
+            self.query_one("#yaw_p", Input).value = "1.0"
+            self.query_one("#yaw_i", Input).value = "0.1"
+            self.query_one("#yaw_d", Input).value = "0.01"
+            self.query_one("#status", Static).update("🔄 Default PID values loaded into inputs.")
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""
@@ -260,6 +312,17 @@ class MspDashboard(App):
                             "yaw": {"p": pids[6], "i": pids[7], "d": pids[8]},
                         }
                         self.query_one(PidWidget).pid_data = pid_data
+
+                        # Update input fields with current values
+                        self.query_one("#roll_p", Input).value = f"{pids[0]:.3f}"
+                        self.query_one("#roll_i", Input).value = f"{pids[1]:.3f}"
+                        self.query_one("#roll_d", Input).value = f"{pids[2]:.3f}"
+                        self.query_one("#pitch_p", Input).value = f"{pids[3]:.3f}"
+                        self.query_one("#pitch_i", Input).value = f"{pids[4]:.3f}"
+                        self.query_one("#pitch_d", Input).value = f"{pids[5]:.3f}"
+                        self.query_one("#yaw_p", Input).value = f"{pids[6]:.3f}"
+                        self.query_one("#yaw_i", Input).value = f"{pids[7]:.3f}"
+                        self.query_one("#yaw_d", Input).value = f"{pids[8]:.3f}"
 
                     # Request Gyro data
                     ser.write(create_msp_request(MSP_GYRO))
