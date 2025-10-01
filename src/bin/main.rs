@@ -8,12 +8,12 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 
-use embassy_stm32::time::Hertz;
+use fade::board_config::{get_clock_config, BoardConfig};
 
 static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
 use embassy_futures::select::{select, Either};
 use embassy_stm32::usb::Driver;
-use embassy_stm32::{bind_interrupts, peripherals, spi, usb, Config};
+use embassy_stm32::{bind_interrupts, peripherals, spi, usb};
 use embassy_time::Delay;
 use embassy_time::Timer;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
@@ -110,66 +110,48 @@ impl embedded_hal::digital::v2::OutputPin for CsPin {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let mut config = Config::default();
-    {
-        use embassy_stm32::rcc::*;
-        config.rcc.hse = Some(Hse {
-            freq: Hertz(8_000_000),
-            mode: HseMode::Oscillator,
-        });
-        config.rcc.pll_src = PllSource::HSE;
-        config.rcc.pll = Some(Pll {
-            prediv: PllPreDiv::DIV4,
-            mul: PllMul::MUL216,
-            divp: Some(PllPDiv::DIV2), // 216 MHz
-            divq: Some(PllQDiv::DIV9), // 48 MHz for USB
-            divr: None,
-        });
-        config.rcc.ahb_pre = AHBPrescaler::DIV1;
-        config.rcc.apb1_pre = APBPrescaler::DIV4;
-        config.rcc.apb2_pre = APBPrescaler::DIV2;
-        config.rcc.sys = Sysclk::PLL1_P;
-    }
-
+    let config = get_clock_config();
     let p = embassy_stm32::init(config);
 
-    // SPI1 configuration for Gyro (HGLRCF722)
+    defmt::info!("Initializing board: {}", BoardConfig::name());
+
+    // SPI1 configuration for Gyro
     let mut spi1_config = spi::Config::default();
-    spi1_config.frequency = Hertz(8_000);
+    spi1_config.frequency = BoardConfig::spi1_frequency();
     let spi1 = spi::Spi::new(
         p.SPI1,
-        p.PA5,
-        p.PA7,
-        p.PA6,
+        p.PA5, // SCK
+        p.PA7, // MOSI
+        p.PA6, // MISO
         p.DMA2_CH3,
         p.DMA2_CH0,
         spi1_config,
     );
 
-    // SPI3 configuration for Flash (HGLRCF722)
+    // SPI3 configuration for Flash
     let mut spi3_config = spi::Config::default();
-    spi3_config.frequency = Hertz(1_000_000); // 1MHz for flash
+    spi3_config.frequency = BoardConfig::spi3_frequency();
     let spi3 = spi::Spi::new(
         p.SPI3,
-        p.PC10,     // SPI3_SCK_PIN
-        p.PC12,     // SPI3_SDO_PIN (MOSI)
-        p.PC11,     // SPI3_SDI_PIN (MISO)
+        p.PC10,     // SCK
+        p.PC12,     // MOSI
+        p.PC11,     // MISO
         p.DMA1_CH5, // TX DMA for SPI3
         p.DMA1_CH0, // RX DMA for SPI3
         spi3_config,
     );
 
-    // Flash setup (HGLRCF722)
-    let _flash_cs = Output::new(p.PD2, Level::High, Speed::VeryHigh); // FLASH_CS_PIN
-    let hold = Output::new(p.PC8, Level::High, Speed::VeryHigh); // Using PINIO1_PIN as hold
-    let wp = Output::new(p.PC9, Level::High, Speed::VeryHigh); // Using PINIO2_PIN as wp
+    // Flash setup
+    let _flash_cs = Output::new(p.PD2, Level::High, Speed::VeryHigh); // Flash CS
+    let hold = Output::new(p.PC8, Level::High, Speed::VeryHigh); // Flash Hold
+    let wp = Output::new(p.PC9, Level::High, Speed::VeryHigh); // Flash WP
 
     // Initialize flash - basic setup for W25Q32JV on SPI3
     let _flash = W25q32jv::new(spi3, hold, wp);
-    defmt::info!("Flash configured on SPI3 with CS=PD2, HOLD=PC8, WP=PC9");
+    defmt::info!("Flash configured on SPI3");
 
-    // Gyro setup (HGLRCF722)
-    let cs_pin = Output::new(p.PB2, Level::High, Speed::VeryHigh); // GYRO_1_CS_PIN
+    // Gyro setup
+    let cs_pin = Output::new(p.PB2, Level::High, Speed::VeryHigh); // Gyro CS
     let cs = CsPin(cs_pin);
     let mpu_bus = SpiBus::new(spi1, cs, Delay);
     let mpu6000 = MPU6000::new(mpu_bus);
