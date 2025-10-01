@@ -27,6 +27,26 @@ const MSP_SAVE_SETTINGS: u16 = 2002;
 const MSP_FLASH_WRITE: u16 = 2003;
 const MSP_FLASH_READ: u16 = 2004;
 
+// Extended configuration commands
+const MSP_GET_FILTER_CONFIG: u16 = 3000;
+const MSP_SET_FILTER_CONFIG: u16 = 3001;
+const MSP_GET_RATE_PROFILE: u16 = 3002;
+const MSP_SET_RATE_PROFILE: u16 = 3003;
+const MSP_GET_MOTOR_CONFIG: u16 = 3004;
+const MSP_SET_MOTOR_CONFIG: u16 = 3005;
+const MSP_GET_OSD_CONFIG: u16 = 3006;
+const MSP_SET_OSD_CONFIG: u16 = 3007;
+const MSP_GET_FLIGHT_MODES: u16 = 3008;
+const MSP_SET_FLIGHT_MODES: u16 = 3009;
+const MSP_GET_BATTERY_CONFIG: u16 = 3010;
+const MSP_SET_BATTERY_CONFIG: u16 = 3011;
+const MSP_GET_FAILSAFE_CONFIG: u16 = 3012;
+const MSP_SET_FAILSAFE_CONFIG: u16 = 3013;
+const MSP_GET_CALIBRATION: u16 = 3014;
+const MSP_SET_CALIBRATION: u16 = 3015;
+const MSP_GET_ALL_CONFIG: u16 = 3016;
+const MSP_SET_ALL_CONFIG: u16 = 3017;
+
 #[derive(Debug)]
 pub struct MspFrame {
     pub command: u16,
@@ -185,12 +205,14 @@ impl MspParser {
 
 pub struct MspManager {
     parser: MspParser,
+    config: FlightConfig,
 }
 
 impl MspManager {
     pub fn new() -> Self {
         Self {
             parser: MspParser::new(),
+            config: FlightConfig::new(),
         }
     }
 
@@ -523,10 +545,402 @@ impl MspManager {
                             }
                         }
                     }
+                    MSP_GET_FILTER_CONFIG => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 20]; // 4 floats + 1 bool + 3 padding = 20 bytes
+                        let p1_bytes = config.filters.gyro_lowpass1_hz.to_le_bytes();
+                        let p2_bytes = config.filters.gyro_lowpass2_hz.to_le_bytes();
+                        let pid_bytes = config.filters.pid_lowpass_hz.to_le_bytes();
+                        let notch_bytes = config.filters.notch_filter_hz.to_le_bytes();
+
+                        payload[0..4].copy_from_slice(&p1_bytes);
+                        payload[4..8].copy_from_slice(&p2_bytes);
+                        payload[8..12].copy_from_slice(&pid_bytes);
+                        payload[12..16].copy_from_slice(&notch_bytes);
+                        payload[16] = if config.filters.notch_filter_enabled {
+                            1
+                        } else {
+                            0
+                        };
+                        // padding bytes remain 0
+
+                        let response = MspFrame::new(MSP_GET_FILTER_CONFIG, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_FILTER_CONFIG => {
+                        if frame.payload.len() >= 17 {
+                            let mut config = self.get_current_config();
+
+                            config.filters.gyro_lowpass1_hz = f32::from_le_bytes([
+                                frame.payload[0],
+                                frame.payload[1],
+                                frame.payload[2],
+                                frame.payload[3],
+                            ]);
+                            config.filters.gyro_lowpass2_hz = f32::from_le_bytes([
+                                frame.payload[4],
+                                frame.payload[5],
+                                frame.payload[6],
+                                frame.payload[7],
+                            ]);
+                            config.filters.pid_lowpass_hz = f32::from_le_bytes([
+                                frame.payload[8],
+                                frame.payload[9],
+                                frame.payload[10],
+                                frame.payload[11],
+                            ]);
+                            config.filters.notch_filter_hz = f32::from_le_bytes([
+                                frame.payload[12],
+                                frame.payload[13],
+                                frame.payload[14],
+                                frame.payload[15],
+                            ]);
+                            config.filters.notch_filter_enabled = frame.payload[16] != 0;
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Filter configuration updated");
+                        }
+                    }
+                    MSP_GET_RATE_PROFILE => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 36]; // 9 floats = 36 bytes
+                        let rates = [
+                            config.rates.max_rate_roll,
+                            config.rates.max_rate_pitch,
+                            config.rates.max_rate_yaw,
+                            config.rates.expo_roll,
+                            config.rates.expo_pitch,
+                            config.rates.expo_yaw,
+                            config.rates.super_rate_roll,
+                            config.rates.super_rate_pitch,
+                            config.rates.super_rate_yaw,
+                        ];
+
+                        for (i, rate) in rates.iter().enumerate() {
+                            let bytes = rate.to_le_bytes();
+                            payload[i * 4..(i + 1) * 4].copy_from_slice(&bytes);
+                        }
+
+                        let response = MspFrame::new(MSP_GET_RATE_PROFILE, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_RATE_PROFILE => {
+                        if frame.payload.len() >= 36 {
+                            let mut config = self.get_current_config();
+
+                            config.rates.max_rate_roll = f32::from_le_bytes([
+                                frame.payload[0],
+                                frame.payload[1],
+                                frame.payload[2],
+                                frame.payload[3],
+                            ]);
+                            config.rates.max_rate_pitch = f32::from_le_bytes([
+                                frame.payload[4],
+                                frame.payload[5],
+                                frame.payload[6],
+                                frame.payload[7],
+                            ]);
+                            config.rates.max_rate_yaw = f32::from_le_bytes([
+                                frame.payload[8],
+                                frame.payload[9],
+                                frame.payload[10],
+                                frame.payload[11],
+                            ]);
+                            config.rates.expo_roll = f32::from_le_bytes([
+                                frame.payload[12],
+                                frame.payload[13],
+                                frame.payload[14],
+                                frame.payload[15],
+                            ]);
+                            config.rates.expo_pitch = f32::from_le_bytes([
+                                frame.payload[16],
+                                frame.payload[17],
+                                frame.payload[18],
+                                frame.payload[19],
+                            ]);
+                            config.rates.expo_yaw = f32::from_le_bytes([
+                                frame.payload[20],
+                                frame.payload[21],
+                                frame.payload[22],
+                                frame.payload[23],
+                            ]);
+                            config.rates.super_rate_roll = f32::from_le_bytes([
+                                frame.payload[24],
+                                frame.payload[25],
+                                frame.payload[26],
+                                frame.payload[27],
+                            ]);
+                            config.rates.super_rate_pitch = f32::from_le_bytes([
+                                frame.payload[28],
+                                frame.payload[29],
+                                frame.payload[30],
+                                frame.payload[31],
+                            ]);
+                            config.rates.super_rate_yaw = f32::from_le_bytes([
+                                frame.payload[32],
+                                frame.payload[33],
+                                frame.payload[34],
+                                frame.payload[35],
+                            ]);
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Rate profile updated");
+                        }
+                    }
+                    MSP_GET_MOTOR_CONFIG => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 8]; // 2+4+1+1 = 8 bytes
+
+                        payload[0..2].copy_from_slice(&config.motors.motor_pwm_rate.to_le_bytes());
+                        payload[2..6].copy_from_slice(&config.motors.motor_idle.to_le_bytes());
+                        payload[6] = config.motors.motor_protocol;
+                        payload[7] = config.motors.motor_poles;
+
+                        let response = MspFrame::new(MSP_GET_MOTOR_CONFIG, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_MOTOR_CONFIG => {
+                        if frame.payload.len() >= 8 {
+                            let mut config = self.get_current_config();
+
+                            config.motors.motor_pwm_rate =
+                                u16::from_le_bytes([frame.payload[0], frame.payload[1]]);
+                            config.motors.motor_idle = f32::from_le_bytes([
+                                frame.payload[2],
+                                frame.payload[3],
+                                frame.payload[4],
+                                frame.payload[5],
+                            ]);
+                            config.motors.motor_protocol = frame.payload[6];
+                            config.motors.motor_poles = frame.payload[7];
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Motor configuration updated");
+                        }
+                    }
+                    MSP_GET_OSD_CONFIG => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 12]; // 1+4+1+2+2+1+1 = 12 bytes
+
+                        payload[0] = if config.osd.enabled { 1 } else { 0 };
+                        payload[1..5].copy_from_slice(&config.osd.voltage_alarm.to_le_bytes());
+                        payload[5] = config.osd.rssi_alarm;
+                        payload[6..8].copy_from_slice(&config.osd.capacity_alarm.to_le_bytes());
+                        payload[8..10].copy_from_slice(&config.osd.timer_alarm.to_le_bytes());
+                        payload[10] = config.osd.units;
+                        // padding byte remains 0
+
+                        let response = MspFrame::new(MSP_GET_OSD_CONFIG, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_OSD_CONFIG => {
+                        if frame.payload.len() >= 11 {
+                            let mut config = self.get_current_config();
+
+                            config.osd.enabled = frame.payload[0] != 0;
+                            config.osd.voltage_alarm = f32::from_le_bytes([
+                                frame.payload[1],
+                                frame.payload[2],
+                                frame.payload[3],
+                                frame.payload[4],
+                            ]);
+                            config.osd.rssi_alarm = frame.payload[5];
+                            config.osd.capacity_alarm =
+                                u16::from_le_bytes([frame.payload[6], frame.payload[7]]);
+                            config.osd.timer_alarm =
+                                u16::from_le_bytes([frame.payload[8], frame.payload[9]]);
+                            config.osd.units = frame.payload[10];
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("OSD configuration updated");
+                        }
+                    }
+                    MSP_GET_FLIGHT_MODES => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 4]; // 4 bools = 4 bytes
+
+                        payload[0] = if config.angle_mode_enabled { 1 } else { 0 };
+                        payload[1] = if config.horizon_mode_enabled { 1 } else { 0 };
+                        payload[2] = if config.air_mode_enabled { 1 } else { 0 };
+                        payload[3] = if config.anti_gravity_enabled { 1 } else { 0 };
+
+                        let response = MspFrame::new(MSP_GET_FLIGHT_MODES, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_FLIGHT_MODES => {
+                        if frame.payload.len() >= 4 {
+                            let mut config = self.get_current_config();
+
+                            config.angle_mode_enabled = frame.payload[0] != 0;
+                            config.horizon_mode_enabled = frame.payload[1] != 0;
+                            config.air_mode_enabled = frame.payload[2] != 0;
+                            config.anti_gravity_enabled = frame.payload[3] != 0;
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Flight modes updated");
+                        }
+                    }
+                    MSP_GET_BATTERY_CONFIG => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 11]; // 1+2+4+4 = 11 bytes
+
+                        payload[0] = config.battery_cells;
+                        payload[1..3].copy_from_slice(&config.battery_capacity.to_le_bytes());
+                        payload[3..7].copy_from_slice(&config.voltage_scale.to_le_bytes());
+                        payload[7..11].copy_from_slice(&config.current_scale.to_le_bytes());
+
+                        let response = MspFrame::new(MSP_GET_BATTERY_CONFIG, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_BATTERY_CONFIG => {
+                        if frame.payload.len() >= 11 {
+                            let mut config = self.get_current_config();
+
+                            config.battery_cells = frame.payload[0];
+                            config.battery_capacity =
+                                u16::from_le_bytes([frame.payload[1], frame.payload[2]]);
+                            config.voltage_scale = f32::from_le_bytes([
+                                frame.payload[3],
+                                frame.payload[4],
+                                frame.payload[5],
+                                frame.payload[6],
+                            ]);
+                            config.current_scale = f32::from_le_bytes([
+                                frame.payload[7],
+                                frame.payload[8],
+                                frame.payload[9],
+                                frame.payload[10],
+                            ]);
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Battery configuration updated");
+                        }
+                    }
+                    MSP_GET_FAILSAFE_CONFIG => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 4]; // 2+2 = 4 bytes
+
+                        payload[0..2].copy_from_slice(&config.failsafe_throttle.to_le_bytes());
+                        payload[2..4].copy_from_slice(&config.failsafe_delay.to_le_bytes());
+
+                        let response = MspFrame::new(MSP_GET_FAILSAFE_CONFIG, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_FAILSAFE_CONFIG => {
+                        if frame.payload.len() >= 4 {
+                            let mut config = self.get_current_config();
+
+                            config.failsafe_throttle =
+                                u16::from_le_bytes([frame.payload[0], frame.payload[1]]);
+                            config.failsafe_delay =
+                                u16::from_le_bytes([frame.payload[2], frame.payload[3]]);
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Failsafe configuration updated");
+                        }
+                    }
+                    MSP_GET_CALIBRATION => {
+                        let config = self.get_current_config();
+                        let mut payload = [0u8; 24]; // 6 floats = 24 bytes
+                        let calibration = [
+                            config.gyro_bias_x,
+                            config.gyro_bias_y,
+                            config.gyro_bias_z,
+                            config.accel_bias_x,
+                            config.accel_bias_y,
+                            config.accel_bias_z,
+                        ];
+
+                        for (i, bias) in calibration.iter().enumerate() {
+                            let bytes = bias.to_le_bytes();
+                            payload[i * 4..(i + 1) * 4].copy_from_slice(&bytes);
+                        }
+
+                        let response = MspFrame::new(MSP_GET_CALIBRATION, &payload);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_CALIBRATION => {
+                        if frame.payload.len() >= 24 {
+                            let mut config = self.get_current_config();
+
+                            config.gyro_bias_x = f32::from_le_bytes([
+                                frame.payload[0],
+                                frame.payload[1],
+                                frame.payload[2],
+                                frame.payload[3],
+                            ]);
+                            config.gyro_bias_y = f32::from_le_bytes([
+                                frame.payload[4],
+                                frame.payload[5],
+                                frame.payload[6],
+                                frame.payload[7],
+                            ]);
+                            config.gyro_bias_z = f32::from_le_bytes([
+                                frame.payload[8],
+                                frame.payload[9],
+                                frame.payload[10],
+                                frame.payload[11],
+                            ]);
+                            config.accel_bias_x = f32::from_le_bytes([
+                                frame.payload[12],
+                                frame.payload[13],
+                                frame.payload[14],
+                                frame.payload[15],
+                            ]);
+                            config.accel_bias_y = f32::from_le_bytes([
+                                frame.payload[16],
+                                frame.payload[17],
+                                frame.payload[18],
+                                frame.payload[19],
+                            ]);
+                            config.accel_bias_z = f32::from_le_bytes([
+                                frame.payload[20],
+                                frame.payload[21],
+                                frame.payload[22],
+                                frame.payload[23],
+                            ]);
+
+                            config.checksum = config.calculate_checksum();
+                            self.set_current_config(config);
+                            defmt::info!("Calibration data updated");
+                        }
+                    }
+                    MSP_GET_ALL_CONFIG => {
+                        let config = self.get_current_config();
+                        let config_bytes = config.to_bytes();
+                        // Send configuration in chunks if needed, for now send first 200 bytes
+                        let chunk_size = core::cmp::min(200, config_bytes.len());
+                        let response =
+                            MspFrame::new(MSP_GET_ALL_CONFIG, &config_bytes[..chunk_size]);
+                        responses.push(response).ok();
+                    }
+                    MSP_SET_ALL_CONFIG => {
+                        if let Some(config) = FlightConfig::from_bytes(&frame.payload) {
+                            self.set_current_config(config);
+                            defmt::info!("Full configuration updated");
+                        } else {
+                            defmt::error!("Invalid configuration data received");
+                        }
+                    }
                     _ => {}
                 }
             }
         }
         responses
+    }
+
+    fn get_current_config(&self) -> FlightConfig {
+        self.config.clone()
+    }
+
+    fn set_current_config(&mut self, config: FlightConfig) {
+        self.config = config;
     }
 }
