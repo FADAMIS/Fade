@@ -14,6 +14,14 @@ test = false
 [lib]
 harness = false
 
+[features]
+
+default = ["h743"]
+
+f722 = ["embassy-stm32/stm32f722ic"]
+
+h743 = ["embassy-stm32/stm32h743ag"]
+
 [dependencies]
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7"
@@ -21,7 +29,7 @@ defmt = "1.0"
 defmt-rtt = "1.0"
 embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread"] }
 embassy-futures = "0.1.2"
-embassy-stm32 = { version = "0.4.0", features = ["stm32f722ic", "time-driver-any", "exti"] }
+embassy-stm32 = { version = "0.4.0", features = ["time-driver-any", "exti"] }
 embassy-sync = "0.7.2"
 embassy-time = "0.5.0"
 embassy-usb = "0.5.1"
