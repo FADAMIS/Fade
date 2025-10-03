@@ -1,6 +1,32 @@
 #![no_main]
 #![no_std]
 
+//! # Board-Agnostic Flight Controller Firmware
+//!
+//! This firmware uses a board abstraction system that allows switching between
+//! different flight controller boards by changing a single line of code.
+//!
+//! ## How to switch boards:
+//! 1. Change the board import below to your target board
+//! 2. All pin mappings, clock configurations, and frequencies will automatically
+//!    be configured for that specific board based on Betaflight configurations
+//!
+//! ## Available boards:
+//! - `HGLRCF722` - HGLRC F722 board
+//! - `SkystarsF7HdPro` - SKYSTARS F7 HD PRO board (based on Betaflight config)
+//!
+//! ## Example board switching:
+//! ```rust
+//! // For HGLRC F722:
+//! use fade::board_config::HGLRCF722 as Board;
+//!
+//! // For SKYSTARS F7 HD PRO:
+//! use fade::board_config::SkystarsF7HdPro as Board;
+//! ```
+//!
+//! The rest of the code remains exactly the same - pins, frequencies, and
+//! configurations are automatically adjusted for the selected board.
+
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 
@@ -8,7 +34,20 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 
-use fade::board_config::{get_clock_config, BoardConfig};
+// 🎯 BOARD SELECTION - Change these lines to switch boards!
+// This single change will reconfigure all pins, clocks, and frequencies
+//
+// For SKYSTARS F7 HD PRO (current):
+use fade::board_config::skystars_pins as pins;
+use fade::board_config::HGLRCF722 as Board;
+//
+// To switch to HGLRC F722, just change to:
+// use fade::board_config::hglrcf722_pins as pins;
+// use fade::board_config::HGLRCF722 as Board;
+//
+// Key differences that are automatically handled:
+// - SKYSTARS: SPI3_MOSI = PB5, GYRO_CS = PA4, FLASH_CS = PA15
+// - HGLRC:    SPI3_MOSI = PC12, GYRO_CS = PB2, FLASH_CS = PD2
 
 static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
 use embassy_futures::select::{select, Either};
@@ -110,48 +149,65 @@ impl embedded_hal::digital::v2::OutputPin for CsPin {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let config = get_clock_config();
+    let config = Board::get_clock_config();
     let p = embassy_stm32::init(config);
 
-    defmt::info!("Initializing board: {}", BoardConfig::name());
+    defmt::info!("Initializing board: {}", Board::NAME);
 
-    // SPI1 configuration for Gyro
+    // Extract all board-specific pins at once using the pin mapping macro
+    let (
+        spi1_sck, // SPI1 pins for gyro
+        spi1_mosi,
+        spi1_miso,
+        spi3_sck,  // SPI3 pins for flash
+        spi3_mosi, // KEY DIFFERENCE: PB5 for SKYSTARS, PC12 for HGLRC
+        spi3_miso,
+        gyro_cs,    // KEY DIFFERENCE: PA4 for SKYSTARS, PB2 for HGLRC
+        flash_cs,   // KEY DIFFERENCE: PA15 for SKYSTARS, PD2 for HGLRC
+        flash_hold, // Flash control pins
+        flash_wp,
+        led_pin, // LED pin
+        usb_dp,  // USB pins
+        usb_dm,
+    ) = pins::get_pins!(p);
+
+    // SPI1 configuration for Gyro - using hardcoded board-specific pins
     let mut spi1_config = spi::Config::default();
-    spi1_config.frequency = BoardConfig::spi1_frequency();
+    spi1_config.frequency = Board::spi1_frequency();
     let spi1 = spi::Spi::new(
         p.SPI1,
-        p.PA5, // SCK
-        p.PA7, // MOSI
-        p.PA6, // MISO
+        spi1_sck,  // SCK - board-specific pin (PA5 for both boards in this case)
+        spi1_mosi, // MOSI - board-specific pin (PA7 for both boards)
+        spi1_miso, // MISO - board-specific pin (PA6 for both boards)
         p.DMA2_CH3,
         p.DMA2_CH0,
         spi1_config,
     );
 
-    // SPI3 configuration for Flash
+    // SPI3 configuration for Flash - using hardcoded board-specific pins
     let mut spi3_config = spi::Config::default();
-    spi3_config.frequency = BoardConfig::spi3_frequency();
+    spi3_config.frequency = Board::spi3_frequency();
     let spi3 = spi::Spi::new(
         p.SPI3,
-        p.PC10,     // SCK
-        p.PC12,     // MOSI
-        p.PC11,     // MISO
+        spi3_sck,   // SCK - board-specific pin (PC10 for both boards)
+        spi3_mosi,  // MOSI - board abstracted (PB5 for SKYSTARS, PC12 for HGLRC)
+        spi3_miso,  // MISO - board-specific pin (PC11 for both boards)
         p.DMA1_CH5, // TX DMA for SPI3
         p.DMA1_CH0, // RX DMA for SPI3
         spi3_config,
     );
 
-    // Flash setup
-    let _flash_cs = Output::new(p.PD2, Level::High, Speed::VeryHigh); // Flash CS
-    let hold = Output::new(p.PC8, Level::High, Speed::VeryHigh); // Flash Hold
-    let wp = Output::new(p.PC9, Level::High, Speed::VeryHigh); // Flash WP
+    // Flash setup - using hardcoded board-specific pins
+    let _flash_cs = Output::new(flash_cs, Level::High, Speed::VeryHigh); // Flash CS - board abstracted (PA15 vs PD2)
+    let hold = Output::new(flash_hold, Level::High, Speed::VeryHigh); // Flash Hold - board-specific
+    let wp = Output::new(flash_wp, Level::High, Speed::VeryHigh); // Flash WP - board-specific
 
     // Initialize flash - basic setup for W25Q32JV on SPI3
     let _flash = W25q32jv::new(spi3, hold, wp);
     defmt::info!("Flash configured on SPI3");
 
-    // Gyro setup
-    let cs_pin = Output::new(p.PB2, Level::High, Speed::VeryHigh); // Gyro CS
+    // Gyro setup - using hardcoded board-specific pins
+    let cs_pin = Output::new(gyro_cs, Level::High, Speed::VeryHigh); // Gyro CS - board abstracted (PA4 vs PB2)
     let cs = CsPin(cs_pin);
     let mpu_bus = SpiBus::new(spi1, cs, Delay);
     let mpu6000 = MPU6000::new(mpu_bus);
@@ -170,8 +226,8 @@ async fn main(spawner: Spawner) {
         8000.0, // sample_rate
     );
 
-    // LED setup
-    let led = Output::new(p.PA14, Level::High, Speed::Low);
+    // LED setup - using hardcoded board-specific pins
+    let led = Output::new(led_pin, Level::High, Speed::Low); // LED - board-specific (PA14 for both boards)
 
     // USB configuration
     let mut usb_config = embassy_usb::Config::new(0x16c0, 0x27dd);
@@ -188,14 +244,14 @@ async fn main(spawner: Spawner) {
     static mut CONTROL_BUF: [u8; 64] = [0; 64];
     static mut STATE: State = State::new();
 
-    // USB driver
+    // USB driver - using hardcoded board-specific pins
     let driver_config = usb::Config::default();
     #[allow(static_mut_refs)]
     let driver = Driver::new_fs(
         p.USB_OTG_FS,
         Irqs,
-        p.PA12, // D+
-        p.PA11, // D-
+        usb_dp, // D+ - board-specific (PA12 for both boards)
+        usb_dm, // D- - board-specific (PA11 for both boards)
         unsafe { &mut EP_MEMORY },
         driver_config,
     );

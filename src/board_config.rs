@@ -3,25 +3,20 @@
 use embassy_stm32::rcc::*;
 use embassy_stm32::time::Hertz;
 
-/// Board-specific configuration
-pub struct BoardConfig;
+/// Board configuration for HGLRC F722
+pub struct HGLRCF722;
 
-impl BoardConfig {
-    /// Get the board name
-    pub const fn name() -> &'static str {
-        "HGLRC F722"
-    }
+impl HGLRCF722 {
+    pub const NAME: &'static str = "HGLRC F722";
 
-    /// Get HSE (High Speed External) oscillator configuration
-    pub const fn hse_config() -> Hse {
+    pub fn hse_config() -> Hse {
         Hse {
             freq: Hertz(8_000_000),
             mode: HseMode::Oscillator,
         }
     }
 
-    /// Get PLL configuration
-    pub const fn pll_config() -> Pll {
+    pub fn pll_config() -> Pll {
         Pll {
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL216,
@@ -31,101 +26,248 @@ impl BoardConfig {
         }
     }
 
-    /// Get AHB prescaler
-    pub const fn ahb_prescaler() -> AHBPrescaler {
+    pub fn ahb_prescaler() -> AHBPrescaler {
         AHBPrescaler::DIV1
     }
 
-    /// Get APB1 prescaler
-    pub const fn apb1_prescaler() -> APBPrescaler {
+    pub fn apb1_prescaler() -> APBPrescaler {
         APBPrescaler::DIV4
     }
 
-    /// Get APB2 prescaler
-    pub const fn apb2_prescaler() -> APBPrescaler {
+    pub fn apb2_prescaler() -> APBPrescaler {
         APBPrescaler::DIV2
     }
 
-    /// Get SPI1 frequency (for gyro)
-    pub const fn spi1_frequency() -> Hertz {
+    pub fn spi1_frequency() -> Hertz {
         Hertz(8_000)
     }
 
-    /// Get SPI3 frequency (for flash)
-    pub const fn spi3_frequency() -> Hertz {
+    pub fn spi3_frequency() -> Hertz {
         Hertz(1_000_000)
     }
+
+    pub fn get_clock_config() -> embassy_stm32::Config {
+        let mut config = embassy_stm32::Config::default();
+        config.rcc.hse = Some(Self::hse_config());
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Self::pll_config());
+        config.rcc.ahb_pre = Self::ahb_prescaler();
+        config.rcc.apb1_pre = Self::apb1_prescaler();
+        config.rcc.apb2_pre = Self::apb2_prescaler();
+        config.rcc.sys = Sysclk::PLL1_P;
+        config
+    }
 }
 
-/// Pin definitions for HGLRC F722
-pub mod pins {
-    /// SPI1 pins (Gyro)
-    pub mod spi1 {
-        use embassy_stm32::peripherals::*;
-        pub type Sck = PA5;
-        pub type Mosi = PA7;
-        pub type Miso = PA6;
+/// Hardcoded pin constants for HGLRC F722
+pub mod hglrcf722_pins {
+    // Macro to extract pins - this defines which physical pins to use
+    #[macro_export]
+    macro_rules! hglrcf722_get_pins {
+        ($p:ident) => {
+            (
+                // SPI1 pins (Gyro)
+                $p.PA5, // SPI1_SCK
+                $p.PA7, // SPI1_MOSI
+                $p.PA6, // SPI1_MISO
+                // SPI3 pins (Flash)
+                $p.PC10, // SPI3_SCK
+                $p.PC12, // SPI3_MOSI - HGLRC specific
+                $p.PC11, // SPI3_MISO
+                // Chip selects
+                $p.PB2, // GYRO_CS - HGLRC specific
+                $p.PD2, // FLASH_CS - HGLRC specific
+                // Flash control pins
+                $p.PC8, // FLASH_HOLD
+                $p.PC9, // FLASH_WP
+                // LED pin
+                $p.PA14, // LED
+                // USB pins
+                $p.PA12, // USB_DP
+                $p.PA11, // USB_DM
+            )
+        };
     }
-
-    /// SPI3 pins (Flash)
-    pub mod spi3 {
-        use embassy_stm32::peripherals::*;
-        pub type Sck = PC10;
-        pub type Mosi = PC12;
-        pub type Miso = PC11;
-    }
-
-    /// Gyro chip select pin
-    pub type GyroCs = embassy_stm32::peripherals::PB2;
-
-    /// Flash pins
-    pub type FlashCs = embassy_stm32::peripherals::PD2;
-    pub type FlashHold = embassy_stm32::peripherals::PC8;
-    pub type FlashWp = embassy_stm32::peripherals::PC9;
-
-    /// LED pin
-    pub type Led = embassy_stm32::peripherals::PA14;
-
-    /// USB pins
-    pub type UsbDp = embassy_stm32::peripherals::PA12;
-    pub type UsbDm = embassy_stm32::peripherals::PA11;
+    pub use hglrcf722_get_pins as get_pins;
 }
 
-/// Get complete clock configuration for the board
-pub fn get_clock_config() -> embassy_stm32::Config {
-    let mut config = embassy_stm32::Config::default();
+/// Board configuration for SKYSTARS F7 HD PRO
+pub struct SkystarsF7HdPro;
 
-    config.rcc.hse = Some(BoardConfig::hse_config());
-    config.rcc.pll_src = PllSource::HSE;
-    config.rcc.pll = Some(BoardConfig::pll_config());
-    config.rcc.ahb_pre = BoardConfig::ahb_prescaler();
-    config.rcc.apb1_pre = BoardConfig::apb1_prescaler();
-    config.rcc.apb2_pre = BoardConfig::apb2_prescaler();
-    config.rcc.sys = Sysclk::PLL1_P;
+impl SkystarsF7HdPro {
+    pub const NAME: &'static str = "SKYSTARS F7 HD PRO";
 
-    config
-}
-
-// Example: Alternative board configuration (commented out)
-// To add support for another board, uncomment and modify as needed:
-
-/*
-/// Alternative board configuration example
-pub struct AlternativeBoard;
-
-impl AlternativeBoard {
-    pub const fn name() -> &'static str {
-        "Alternative F4 Board"
-    }
-
-    pub const fn hse_config() -> Hse {
+    pub fn hse_config() -> Hse {
         Hse {
-            freq: Hertz(25_000_000), // Different HSE frequency
+            freq: Hertz(8_000_000), // 8 MHz crystal
             mode: HseMode::Oscillator,
         }
     }
 
-    pub const fn pll_config() -> Pll {
+    pub fn pll_config() -> Pll {
+        Pll {
+            prediv: PllPreDiv::DIV4,
+            mul: PllMul::MUL216,
+            divp: Some(PllPDiv::DIV2), // 216 MHz system clock
+            divq: Some(PllQDiv::DIV9), // 48 MHz USB
+            divr: None,
+        }
+    }
+
+    pub fn ahb_prescaler() -> AHBPrescaler {
+        AHBPrescaler::DIV1
+    }
+
+    pub fn apb1_prescaler() -> APBPrescaler {
+        APBPrescaler::DIV4
+    }
+
+    pub fn apb2_prescaler() -> APBPrescaler {
+        APBPrescaler::DIV2
+    }
+
+    pub fn spi1_frequency() -> Hertz {
+        Hertz(8_000_000) // gyro
+    }
+
+    pub fn spi3_frequency() -> Hertz {
+        Hertz(1_000_000) // flash
+    }
+
+    pub fn get_clock_config() -> embassy_stm32::Config {
+        let mut config = embassy_stm32::Config::default();
+        config.rcc.hse = Some(Self::hse_config());
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Self::pll_config());
+        config.rcc.ahb_pre = Self::ahb_prescaler();
+        config.rcc.apb1_pre = Self::apb1_prescaler();
+        config.rcc.apb2_pre = Self::apb2_prescaler();
+        config.rcc.sys = Sysclk::PLL1_P;
+        config
+    }
+}
+
+/// Hardcoded pin constants for SKYSTARS F7 HD PRO - Based on Betaflight configuration
+pub mod skystars_pins {
+    // Macro to extract pins - this defines which physical pins to use
+    #[macro_export]
+    macro_rules! skystars_get_pins {
+        ($p:ident) => {
+            (
+                // SPI1 pins (Gyro) - From Betaflight config
+                $p.PA5, // SPI1_SCK_PIN
+                $p.PA7, // SPI1_SDO_PIN (MOSI)
+                $p.PA6, // SPI1_SDI_PIN (MISO)
+                // SPI3 pins (Flash) - From Betaflight config
+                $p.PC10, // SPI3_SCK_PIN
+                $p.PB5,  // SPI3_SDO_PIN (MOSI) - KEY DIFFERENCE! SKYSTARS uses PB5
+                $p.PC11, // SPI3_SDI_PIN (MISO)
+                // Chip selects - From Betaflight config
+                $p.PA4,  // GYRO_1_CS_PIN - KEY DIFFERENCE! SKYSTARS uses PA4
+                $p.PA15, // FLASH_CS_PIN - KEY DIFFERENCE! SKYSTARS uses PA15
+                // Flash control pins - From Betaflight config (reusing motor pins)
+                $p.PC8, // MOTOR1_PIN (FLASH_HOLD)
+                $p.PC9, // MOTOR2_PIN (FLASH_WP)
+                // LED pin - From Betaflight config
+                $p.PA14, // PINIO1_PIN (LED)
+                // USB pins (standard)
+                $p.PA12, // USB_DP
+                $p.PA11, // USB_DM
+            )
+        };
+    }
+    pub use skystars_get_pins as get_pins;
+}
+
+// Legacy compatibility functions
+pub fn get_clock_config() -> embassy_stm32::Config {
+    HGLRCF722::get_clock_config()
+}
+
+pub fn get_skystars_clock_config() -> embassy_stm32::Config {
+    SkystarsF7HdPro::get_clock_config()
+}
+
+// Additional pin definitions from Betaflight configuration for reference
+pub mod betaflight_pins {
+    use embassy_stm32::peripherals::*;
+
+    // Motors - MOTOR1_PIN, MOTOR2_PIN, MOTOR3_PIN, MOTOR4_PIN
+    pub type Motor1 = PC8;
+    pub type Motor2 = PC9;
+    pub type Motor3 = PB6;
+    pub type Motor4 = PB7;
+
+    // LEDs - LED0_PIN, LED1_PIN
+    pub type Led0 = PC15;
+    pub type Led1 = PC14;
+
+    // Beeper - BEEPER_PIN
+    pub type Beeper = PB2;
+
+    // SPI2 (OSD/Baro) - SPI2_SCK_PIN, SPI2_SDO_PIN, SPI2_SDI_PIN
+    pub type Spi2Sck = PB13;
+    pub type Spi2Mosi = PB15;
+    pub type Spi2Miso = PB14;
+
+    // Additional chip selects
+    pub type Gyro2Cs = PC13; // GYRO_2_CS_PIN
+    pub type BaroCs = PB1; // BARO_CS_PIN
+    pub type OsdCs = PB12; // MAX7456_SPI_CS_PIN
+
+    // Gyro interrupts
+    pub type Gyro1Int = PC4; // GYRO_1_EXTI_PIN
+    pub type Gyro2Int = PC0; // GYRO_2_EXTI_PIN
+
+    // LED strip - LED_STRIP_PIN
+    pub type LedStrip = PB3;
+
+    // Camera control - CAMERA_CONTROL_PIN
+    pub type CameraControl = PA8;
+
+    // ADC inputs
+    pub type VBat = PC1; // ADC_VBAT_PIN
+    pub type Rssi = PC2; // ADC_RSSI_PIN
+    pub type Curr = PC3; // ADC_CURR_PIN
+
+    // I2C - I2C1_SCL_PIN, I2C1_SDA_PIN
+    pub type I2cScl = PB8;
+    pub type I2cSda = PB9;
+
+    // UARTs
+    pub type Uart1Tx = PA9; // UART1_TX_PIN
+    pub type Uart1Rx = PA10; // UART1_RX_PIN
+    pub type Uart2Tx = PA2; // UART2_TX_PIN
+    pub type Uart2Rx = PA3; // UART2_RX_PIN
+    pub type Uart3Tx = PB10; // UART3_TX_PIN
+    pub type Uart3Rx = PB11; // UART3_RX_PIN
+    pub type Uart4Tx = PA0; // UART4_TX_PIN
+    pub type Uart4Rx = PA1; // UART4_RX_PIN
+    pub type Uart5Tx = PC12; // UART5_TX_PIN
+    pub type Uart5Rx = PD2; // UART5_RX_PIN
+    pub type Uart6Tx = PC6; // UART6_TX_PIN
+    pub type Uart6Rx = PC7; // UART6_RX_PIN
+
+    // PPM RX - RX_PPM_PIN
+    pub type RxPpm = PB4;
+}
+
+// Example: Custom F4 Board configuration
+// Uncomment this to add support for a new board
+/*
+pub struct CustomF4Board;
+
+impl CustomF4Board {
+    pub const NAME: &'static str = "Custom F4 Board";
+
+    pub fn hse_config() -> Hse {
+        Hse {
+            freq: Hertz(25_000_000), // Different 25MHz crystal
+            mode: HseMode::Oscillator,
+        }
+    }
+
+    pub fn pll_config() -> Pll {
         Pll {
             prediv: PllPreDiv::DIV25,
             mul: PllMul::MUL336,
@@ -135,55 +277,71 @@ impl AlternativeBoard {
         }
     }
 
-    pub const fn ahb_prescaler() -> AHBPrescaler {
+    pub fn ahb_prescaler() -> AHBPrescaler {
         AHBPrescaler::DIV1
     }
 
-    pub const fn apb1_prescaler() -> APBPrescaler {
+    pub fn apb1_prescaler() -> APBPrescaler {
         APBPrescaler::DIV4
     }
 
-    pub const fn apb2_prescaler() -> APBPrescaler {
+    pub fn apb2_prescaler() -> APBPrescaler {
         APBPrescaler::DIV2
     }
 
-    pub const fn spi1_frequency() -> Hertz {
-        Hertz(10_000) // Different SPI frequency
+    pub fn spi1_frequency() -> Hertz {
+        Hertz(10_000) // Different frequency
     }
 
-    pub const fn spi3_frequency() -> Hertz {
-        Hertz(2_000_000) // Different flash frequency
+    pub fn spi3_frequency() -> Hertz {
+        Hertz(2_000_000) // Different frequency
+    }
+
+    pub fn get_clock_config() -> embassy_stm32::Config {
+        let mut config = embassy_stm32::Config::default();
+        config.rcc.hse = Some(Self::hse_config());
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Self::pll_config());
+        config.rcc.ahb_pre = Self::ahb_prescaler();
+        config.rcc.apb1_pre = Self::apb1_prescaler();
+        config.rcc.apb2_pre = Self::apb2_prescaler();
+        config.rcc.sys = Sysclk::PLL1_P;
+        config
     }
 }
 
-/// Alternative pin definitions
-pub mod alt_pins {
-    /// SPI1 pins for alternative board
-    pub mod spi1 {
-        use embassy_stm32::peripherals::*;
-        pub type Sck = PA5;   // Could be different pins
-        pub type Mosi = PA7;  // for different board
-        pub type Miso = PA6;
+/// Pin configuration for Custom F4 Board
+pub mod custom_f4_pins {
+    #[macro_export]
+    macro_rules! custom_f4_get_pins {
+        ($p:ident) => {
+            (
+                // SPI1 pins (same as others)
+                $p.PA5, // SPI1_SCK
+                $p.PA7, // SPI1_MOSI
+                $p.PA6, // SPI1_MISO
+                // SPI3 pins (DIFFERENT from other boards)
+                $p.PB3, // SPI3_SCK - Different!
+                $p.PB5, // SPI3_MOSI - Different!
+                $p.PB4, // SPI3_MISO - Different!
+                // Chip selects (DIFFERENT)
+                $p.PC4, // GYRO_CS - Different!
+                $p.PC0, // FLASH_CS - Different!
+                // Flash control pins
+                $p.PC1, // FLASH_HOLD - Different!
+                $p.PC2, // FLASH_WP - Different!
+                // LED pin (DIFFERENT)
+                $p.PC13, // LED - Different LED pin!
+                // USB pins (same)
+                $p.PA12, // USB_DP
+                $p.PA11, // USB_DM
+            )
+        };
     }
-
-    pub mod spi3 {
-        use embassy_stm32::peripherals::*;
-        pub type Sck = PB3;   // Different pins example
-        pub type Mosi = PB5;
-        pub type Miso = PB4;
-    }
-
-    pub type GyroCs = embassy_stm32::peripherals::PC4;    // Different CS pin
-    pub type FlashCs = embassy_stm32::peripherals::PC0;   // Different flash pins
-    pub type FlashHold = embassy_stm32::peripherals::PC1;
-    pub type FlashWp = embassy_stm32::peripherals::PC2;
-    pub type Led = embassy_stm32::peripherals::PC13;      // Different LED pin
-    pub type UsbDp = embassy_stm32::peripherals::PA12;    // USB pins usually same
-    pub type UsbDm = embassy_stm32::peripherals::PA11;
+    pub use custom_f4_get_pins as get_pins;
 }
 
-/// To switch to alternative board:
-/// 1. Replace BoardConfig usage with AlternativeBoard
-/// 2. Replace pins module usage with alt_pins
-/// 3. Update main.rs pin references accordingly
+// To use this board, change main.rs imports to:
+// use fade::board_config::custom_f4_pins as pins;
+// use fade::board_config::CustomF4Board as Board;
 */

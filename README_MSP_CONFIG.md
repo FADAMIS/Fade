@@ -260,6 +260,140 @@ python3 msp_config_test.py
 - Implement retry logic for critical operations
 - Check USB cable and connection stability
 
+### DFU Mode Troubleshooting
+
+#### Common Issues and Solutions
+
+**Issue: DFU command acknowledged but dfu-util shows no device**
+
+This is the most common issue. The device successfully resets but doesn't enter DFU mode properly.
+
+**Solutions:**
+1. **Check timing**: Wait 3-5 seconds after DFU command before checking for devices
+2. **Multiple attempts**: Run the DFU trigger command multiple times
+3. **USB connection**: Try different USB cables and ports
+4. **Check system logs**:
+   ```bash
+   # macOS
+   log show --last 30s | grep -i usb
+   
+   # Linux
+   dmesg | tail -20
+   ```
+
+**Issue: Device not detected as STM32 flight controller**
+
+**Solutions:**
+1. Verify USB cable supports data (not charge-only)
+2. Check if device appears in system devices:
+   ```bash
+   # macOS
+   system_profiler SPUSBDataType | grep -i stm
+   
+   # Linux
+   lsusb | grep -i stm
+   ```
+3. Try manual port specification:
+   ```bash
+   python3 dfu_trigger.py /dev/ttyACM0  # Linux
+   python3 dfu_trigger.py /dev/cu.usbmodemXXXX  # macOS
+   ```
+
+**Issue: MSP command fails or times out**
+
+**Solutions:**
+1. Ensure no other applications are using the serial port
+2. Check baud rate and connection settings
+3. Verify flight controller is running correct firmware
+4. Try with props removed and battery disconnected
+
+#### Hardware DFU Mode (Fallback Method)
+
+If software DFU trigger fails, use hardware method:
+
+**For boards with BOOT button:**
+1. Disconnect USB cable
+2. Hold BOOT/DFU button
+3. Connect USB while holding button
+4. Release button after 2-3 seconds
+5. Check for DFU device: `dfu-util -l`
+
+**For boards without BOOT button:**
+1. Locate BOOT0 pin/pad on flight controller
+2. Bridge BOOT0 to 3.3V with jumper wire
+3. Power cycle or reset the device
+4. Remove jumper after device enters DFU mode
+
+#### Verification Commands
+
+**Check if DFU device is detected:**
+```bash
+# Primary method
+dfu-util -l
+
+# Alternative methods
+lsusb | grep -i dfu
+lsusb | grep "0483:df11"  # STM32 DFU VID:PID
+system_profiler SPUSBDataType | grep -i dfu  # macOS
+```
+
+**Expected DFU output:**
+```
+Found DFU: [0483:df11] ver=2200, devnum=X, cfg=1, intf=0, path="..."
+```
+
+#### Advanced Diagnostics
+
+**Enable verbose logging in Python script:**
+```python
+# Add this to dfu_trigger.py for more debug info
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+**Monitor USB events during DFU trigger:**
+```bash
+# Terminal 1: Monitor USB events
+# macOS
+log stream --predicate 'category == "com.apple.usb"'
+
+# Linux
+sudo udevadm monitor
+
+# Terminal 2: Run DFU trigger
+python3 dfu_trigger.py
+```
+
+**Check if device resets properly:**
+1. Note current USB device path
+2. Run DFU trigger command
+3. Verify original device disappears
+4. Check if new device appears (should be DFU device)
+
+#### Platform-Specific Notes
+
+**macOS:**
+- DFU devices may appear as `/dev/cu.usbmodemDFU*`
+- Use `brew install dfu-util` for latest version
+- May require additional drivers for some STM32 variants
+
+**Linux:**
+- DFU devices appear in `/dev/` as `ttyACMx` or similar
+- Ensure user is in `dialout` group: `sudo usermod -a -G dialout $USER`
+- May need udev rules for proper permissions
+
+**Windows:**
+- Install STM32 USB drivers or use STM32CubeProgrammer
+- DFU devices show as "STM32 BOOTLOADER" in Device Manager
+- Use STM32CubeProgrammer GUI as alternative to dfu-util
+
+#### Recovery Procedures
+
+**If device becomes unresponsive:**
+1. Try hardware DFU mode entry
+2. Use ST-Link programmer if available
+3. Check for firmware corruption
+
 ## Development
 
 ### Building the Firmware
