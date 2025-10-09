@@ -33,13 +33,13 @@ where
     }
 }
 
-pub struct GyroManager<BUS, D> {
+pub struct Mpu6000Manager<BUS, D> {
     mpu: MPU6000<BUS>,
     #[allow(dead_code)]
     delay: DelayCompat<D>,
 }
 
-impl<BUS, D, E> GyroManager<BUS, D>
+impl<BUS, D, E> Mpu6000Manager<BUS, D>
 where
     BUS: RegAccess<Error = E>,
     D: DelayUs<u32> + DelayMs<u32>,

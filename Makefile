@@ -1,15 +1,33 @@
 # Makefile for STM32F7 Rust firmware with USB support
 
 # Default target
-.PHONY: all build release flash flash-release clean verify-usb monitor-usb monitor help
+.PHONY: all build release flash flash-release clean verify-usb monitor-usb monitor help flash-f722 flash-h743
 
 # Default build (debug)
 all: build
 
-# Build debug version and generate binary
+# Default build (debug)
 build:
 	@echo "Building debug version..."
 	@cargo build
+	@echo "Generating firm.bin..."
+	@arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/debug/main firm.bin
+	@echo "✓ Generated firm.bin ($(shell wc -c < firm.bin) bytes)"
+
+# Build for F722
+build-f722:
+	@echo "Building for F722..."
+	@cp memory.f722.x memory.x
+	@cargo build --no-default-features --features stm32f
+	@echo "Generating firm.bin..."
+	@arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/debug/main firm.bin
+	@echo "✓ Generated firm.bin ($(shell wc -c < firm.bin) bytes)"
+
+# Build for H743
+build-h743:
+	@echo "Building for H743..."
+	@cp memory.h743.x memory.x
+	@cargo build --no-default-features --features stm32h7
 	@echo "Generating firm.bin..."
 	@arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/debug/main firm.bin
 	@echo "✓ Generated firm.bin ($(shell wc -c < firm.bin) bytes)"
@@ -26,7 +44,19 @@ release:
 flash: build
 	@echo "Flashing firmware..."
 	@dfu-util -a 0 -s 0x08000000:leave -D firm.bin
-	@echo "Firmware flashed successfully!"
+
+# Flash F722 firmware
+flash-f722: build-f722
+	@echo "Flashing F722 firmware..."
+	@dfu-util -a 0 -s 0x08000000:leave -D firm.bin
+
+# Flash H743 firmware
+flash-h743: build-h743
+	@echo "Flashing H743 firmware..."
+	@echo "--- Using the following memory.x ---"
+	@cat memory.x
+	@echo "------------------------------------"
+	@dfu-util -a 0 -s 0x08000000:leave -D firm.bin
 
 
 # Flash release firmware and verify USB connection
@@ -85,6 +115,8 @@ help:
 	@echo "  release        - Build release version and generate firm.bin"
 	@echo "  flash          - Build, flash debug firmware via DFU, and verify USB connection"
 	@echo "  flash-release  - Build, flash release firmware via DFU, and verify USB connection"
+	@echo "  flash-f722     - Build and flash f722 firmware"
+	@echo "  flash-h743     - Build and flash h743 firmware"
 	@echo "  verify-usb     - Check if the STM32F7 USB device is detected on macOS"
 	@echo "  monitor-usb    - Continuously monitor for USB device connection"
 	@echo "  monitor        - Monitor the USB serial port for messages"

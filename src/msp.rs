@@ -216,7 +216,7 @@ impl MspManager {
         }
     }
 
-    fn save_config_to_flash(&self, pids: &PidControllers) -> bool {
+    pub fn save_config_to_flash(&self, pids: &PidControllers) -> bool {
         #[allow(static_mut_refs)]
         unsafe {
             if !FLASH_INITIALIZED {
@@ -317,8 +317,9 @@ impl MspManager {
         pids: &mut PidControllers,
         gyro: &Vector3,
         pid_corr: &Vector3,
-    ) -> Vec<MspFrame, 8> {
+    ) -> (Vec<MspFrame, 8>, bool) {
         let mut responses = Vec::new();
+        let mut config_changed = false;
 
         defmt::debug!("MSP received {} bytes: {:02X}", data.len(), data);
 
@@ -346,8 +347,8 @@ impl MspManager {
                             pids.set_gains(Axis::Pitch, data[3], data[4], data[5]);
                             pids.set_gains(Axis::Yaw, data[6], data[7], data[8]);
 
-                            // Auto-save configuration when PID values are changed
-                            self.save_config_to_flash(pids);
+                            // Mark that configuration has changed
+                            config_changed = true;
                             defmt::info!("PID values updated and configuration saved");
                         }
                     }
@@ -933,7 +934,8 @@ impl MspManager {
                 }
             }
         }
-        responses
+
+        (responses, config_changed)
     }
 
     fn get_current_config(&self) -> FlightConfig {

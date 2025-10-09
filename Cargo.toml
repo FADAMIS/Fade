@@ -16,11 +16,10 @@ harness = false
 
 [features]
 
-default = ["h743"]
+default = ["stm32f"]
 
-f722 = ["embassy-stm32/stm32f722ic"]
-
-h743 = ["embassy-stm32/stm32h743ag"]
+stm32f = ["embassy-stm32/stm32f722ic"]
+stm32h7 = ["embassy-stm32/stm32h743ag"]
 
 [dependencies]
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
