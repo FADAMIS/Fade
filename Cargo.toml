@@ -16,7 +16,7 @@ harness = false
 
 [features]
 
-default = ["stm32f"]
+default = ["stm32h7"]
 
 stm32f = ["embassy-stm32/stm32f722ic"]
 stm32h7 = ["embassy-stm32/stm32h743ag"]
@@ -24,10 +24,10 @@ stm32h7 = ["embassy-stm32/stm32h743ag"]
 [dependencies]
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7"
+crsf = "2.0.1"
 defmt = "1.0"
 defmt-rtt = "1.0"
 embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread"] }
-embassy-futures = "0.1.2"
 embassy-stm32 = { version = "0.4.0", features = ["time-driver-any", "exti"] }
 embassy-sync = "0.7.2"
 embassy-time = "0.5.0"
@@ -38,7 +38,6 @@ micromath = "2.1.0"
 mpu6000 = "0.3.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 semihosting = "0.1.20"
-w25q32jv = "0.5.1"
 
 [dev-dependencies]
 defmt-test = "0.3"

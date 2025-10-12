@@ -165,11 +165,20 @@ pub struct GyroFilter {
     static_notch: BiquadFilter3,
 
     // Configuration
+    sample_rate: f32,
     lowpass1_enabled: bool,
+    lowpass1_cutoff: f32,
     lowpass2_enabled: bool,
+    lowpass2_cutoff: f32,
     notch1_enabled: bool,
+    notch1_center: f32,
+    notch1_q: f32,
     notch2_enabled: bool,
+    notch2_center: f32,
+    notch2_q: f32,
     static_notch_enabled: bool,
+    static_notch_center: f32,
+    static_notch_q: f32,
 
     // Robust calibration system
     bias: [f32; 3],
@@ -180,6 +189,8 @@ pub struct GyroFilter {
     calibration_sum: [f32; 3],
     calibration_samples: u32,
     calibration_threshold: f32,
+    startup_delay_ms: f32,
+    stability_time_ms: f32,
 
     // Stability detection for robust calibration
     stability_buffer: [[f32; 3]; 10], // Rolling buffer of recent samples
@@ -202,11 +213,20 @@ impl GyroFilter {
             notch1: BiquadFilter3::new(),
             notch2: BiquadFilter3::new(),
             static_notch: BiquadFilter3::new(),
+            sample_rate,
             lowpass1_enabled: true,
+            lowpass1_cutoff: 0.0,
             lowpass2_enabled: true,
+            lowpass2_cutoff: 0.0,
             notch1_enabled: false,
+            notch1_center: 0.0,
+            notch1_q: 0.0,
             notch2_enabled: false,
+            notch2_center: 0.0,
+            notch2_q: 0.0,
             static_notch_enabled: false,
+            static_notch_center: 0.0,
+            static_notch_q: 0.0,
             bias: [0.0; 3],
             deadband: 0.5, // 0.5 deg/s deadband
             calibrated: false,
@@ -215,51 +235,113 @@ impl GyroFilter {
             calibration_sum: [0.0; 3],
             calibration_samples: 200,   // More samples for better accuracy
             calibration_threshold: 1.5, // 1.5 deg/s max motion threshold
+            startup_delay_ms: 500.0,
+            stability_time_ms: 100.0,
 
             // Stability detection
             stability_buffer: [[0.0; 3]; 10],
             stability_index: 0,
             stability_buffer_full: false,
-            min_stability_time: 100, // Must be stable for 100 samples (100ms at 1kHz)
+            min_stability_time: (100.0 * sample_rate / 1000.0) as u32, // Must be stable for 100 samples (100ms at 1kHz)
             stability_counter: 0,
             max_sample_deviation: 1.0, // Max 1.0 deg/s deviation between samples (more lenient)
 
             // Startup delay - ignore first 500ms of data
-            startup_delay: (sample_rate * 0.5) as u32, // 500ms delay
+            startup_delay: (500.0 * sample_rate / 1000.0) as u32, // 500ms delay
             startup_counter: 0,
         };
 
         // Default Betaflight-like settings
-        filter.setup_lowpass1(sample_rate, 250.0); // 250Hz first lowpass
-        filter.setup_lowpass2(sample_rate, 125.0); // 125Hz second lowpass
+        filter.setup_lowpass1(250.0); // 250Hz first lowpass
+        filter.setup_lowpass2(125.0); // 125Hz second lowpass
 
         filter
     }
 
-    pub fn setup_lowpass1(&mut self, sample_rate: f32, cutoff_freq: f32) {
-        self.lowpass1.setup_lowpass(sample_rate, cutoff_freq);
+    pub fn update_sample_rate(&mut self, new_sample_rate: f32) {
+        self.sample_rate = new_sample_rate;
+
+        // Re-apply all filter settings with the new sample rate
+        if self.lowpass1_enabled {
+            self.lowpass1
+                .setup_lowpass(self.sample_rate, self.lowpass1_cutoff);
+        }
+        if self.lowpass2_enabled {
+            self.lowpass2
+                .setup_lowpass(self.sample_rate, self.lowpass2_cutoff);
+        }
+        if self.notch1_enabled {
+            self.notch1
+                .setup_notch(self.sample_rate, self.notch1_center, self.notch1_q);
+        }
+        if self.notch2_enabled {
+            self.notch2
+                .setup_notch(self.sample_rate, self.notch2_center, self.notch2_q);
+        }
+        if self.static_notch_enabled {
+            self.static_notch.setup_notch(
+                self.sample_rate,
+                self.static_notch_center,
+                self.static_notch_q,
+            );
+        }
+
+        // Re-calculate sample-based timings for calibration
+        self.min_stability_time = (self.stability_time_ms * self.sample_rate / 1000.0) as u32;
+        self.startup_delay = (self.startup_delay_ms * self.sample_rate / 1000.0) as u32;
+
+        // It's also a good idea to reset the filters' state when changing the sample rate
+        self.lowpass1.reset();
+        self.lowpass2.reset();
+        self.notch1.reset();
+        self.notch2.reset();
+        self.static_notch.reset();
+    }
+
+    pub fn setup_lowpass1(&mut self, cutoff_freq: f32) {
+        self.lowpass1_cutoff = cutoff_freq;
         self.lowpass1_enabled = cutoff_freq > 0.0;
+        if self.lowpass1_enabled {
+            self.lowpass1.setup_lowpass(self.sample_rate, cutoff_freq);
+        }
     }
 
-    pub fn setup_lowpass2(&mut self, sample_rate: f32, cutoff_freq: f32) {
-        self.lowpass2.setup_lowpass(sample_rate, cutoff_freq);
+    pub fn setup_lowpass2(&mut self, cutoff_freq: f32) {
+        self.lowpass2_cutoff = cutoff_freq;
         self.lowpass2_enabled = cutoff_freq > 0.0;
+        if self.lowpass2_enabled {
+            self.lowpass2.setup_lowpass(self.sample_rate, cutoff_freq);
+        }
     }
 
-    pub fn setup_notch1(&mut self, sample_rate: f32, center_freq: f32, q_factor: f32) {
-        self.notch1.setup_notch(sample_rate, center_freq, q_factor);
+    pub fn setup_notch1(&mut self, center_freq: f32, q_factor: f32) {
+        self.notch1_center = center_freq;
+        self.notch1_q = q_factor;
         self.notch1_enabled = center_freq > 0.0;
+        if self.notch1_enabled {
+            self.notch1
+                .setup_notch(self.sample_rate, center_freq, q_factor);
+        }
     }
 
-    pub fn setup_notch2(&mut self, sample_rate: f32, center_freq: f32, q_factor: f32) {
-        self.notch2.setup_notch(sample_rate, center_freq, q_factor);
+    pub fn setup_notch2(&mut self, center_freq: f32, q_factor: f32) {
+        self.notch2_center = center_freq;
+        self.notch2_q = q_factor;
         self.notch2_enabled = center_freq > 0.0;
+        if self.notch2_enabled {
+            self.notch2
+                .setup_notch(self.sample_rate, center_freq, q_factor);
+        }
     }
 
-    pub fn setup_static_notch(&mut self, sample_rate: f32, center_freq: f32, q_factor: f32) {
-        self.static_notch
-            .setup_notch(sample_rate, center_freq, q_factor);
+    pub fn setup_static_notch(&mut self, center_freq: f32, q_factor: f32) {
+        self.static_notch_center = center_freq;
+        self.static_notch_q = q_factor;
         self.static_notch_enabled = center_freq > 0.0;
+        if self.static_notch_enabled {
+            self.static_notch
+                .setup_notch(self.sample_rate, center_freq, q_factor);
+        }
     }
 
     pub fn set_calibration_params(
@@ -269,13 +351,16 @@ impl GyroFilter {
         deadband: f32,
         stability_time_ms: f32,
         startup_delay_ms: f32,
-        sample_rate: f32,
     ) {
         self.calibration_samples = samples;
         self.calibration_threshold = threshold;
         self.deadband = deadband;
-        self.min_stability_time = (stability_time_ms * sample_rate / 1000.0) as u32;
-        self.startup_delay = (startup_delay_ms * sample_rate / 1000.0) as u32;
+        self.stability_time_ms = stability_time_ms;
+        self.startup_delay_ms = startup_delay_ms;
+
+        // Recalculate sample-based timings
+        self.min_stability_time = (self.stability_time_ms * self.sample_rate / 1000.0) as u32;
+        self.startup_delay = (self.startup_delay_ms * self.sample_rate / 1000.0) as u32;
     }
 
     pub fn reset_calibration(&mut self) {
@@ -531,6 +616,8 @@ impl GyroFilter {
 #[derive(Debug, Clone)]
 pub struct AccelFilter3 {
     filters: [BiquadFilter; 3],
+    sample_rate: f32,
+    cutoff_freq: f32,
 }
 
 impl AccelFilter3 {
@@ -545,7 +632,25 @@ impl AccelFilter3 {
             filter.setup_pt1(sample_rate, cutoff_freq);
         }
 
-        Self { filters }
+        Self {
+            filters,
+            sample_rate,
+            cutoff_freq,
+        }
+    }
+
+    pub fn update_sample_rate(&mut self, new_sample_rate: f32) {
+        self.sample_rate = new_sample_rate;
+        for filter in &mut self.filters {
+            filter.setup_pt1(self.sample_rate, self.cutoff_freq);
+        }
+    }
+
+    pub fn update_cutoff_freq(&mut self, new_cutoff_freq: f32) {
+        self.cutoff_freq = new_cutoff_freq;
+        for filter in &mut self.filters {
+            filter.setup_pt1(self.sample_rate, self.cutoff_freq);
+        }
     }
 
     pub fn update(&mut self, input: [f32; 3]) -> [f32; 3] {
