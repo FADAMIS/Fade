@@ -3,22 +3,22 @@
 
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::spi::Spi;
+use embassy_stm32::spi;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usb;
-use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, init};
-use embassy_stm32::{peripherals, spi};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_stm32::{peripherals, usb::Driver};
+use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::Channel;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
 use fade::filters::GyroFilter;
-use fade::gyro::Mpu6000Manager;
-use mpu6000::bus::SpiBus;
-use mpu6000::MPU6000;
+use fade::gyro::Icm42688Manager;
+use icm426xx::ICM42688;
+use static_cell::StaticCell;
 
 #[cfg(feature = "stm32h7")]
 use fade::board_config::SequireH7V2Pins as BoardPins;
@@ -36,20 +36,6 @@ static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new
 // =================== USB CDC GLOBAL ===================
 static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>> = None;
 
-// =================== CHIP SELECT PIN WRAPPER ===================
-struct CsPin(Output<'static>);
-impl embedded_hal::digital::v2::OutputPin for CsPin {
-    type Error = ();
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.0.set_low();
-        Ok(())
-    }
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.0.set_high();
-        Ok(())
-    }
-}
-
 // =================== TASKS ===================
 
 #[embassy_executor::task]
@@ -63,15 +49,19 @@ async fn led_task(mut led: Output<'static>) {
 }
 
 #[embassy_executor::task]
-async fn gyro_task(
-    mut gyro: Mpu6000Manager<
-        SpiBus<spi::Spi<'static, embassy_stm32::mode::Async>, CsPin, Delay>,
-        Delay,
+async fn icm42688_task(
+    mut gyro: Icm42688Manager<
+        embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<
+            'static,
+            NoopRawMutex,
+            spi::Spi<'static, embassy_stm32::mode::Async>,
+            Output<'static>,
+        >,
     >,
     mut filter: GyroFilter,
 ) {
     loop {
-        if let Ok(raw_gyro) = gyro.read_gyro() {
+        if let Ok(raw_gyro) = gyro.read_gyro().await {
             let filtered_gyro = filter.update(raw_gyro);
             MSP_GYRO_CHANNEL.send(filtered_gyro).await;
         }
@@ -109,9 +99,12 @@ async fn main(spawner: Spawner) {
     let led = Output::new(pins.led_pin, Level::Low, Speed::Low);
 
     // Gyro setup
-    let gyro_spi_config = spi::Config::default();
+    let mut gyro_spi_config = spi::Config::default();
+    gyro_spi_config.frequency = Hertz(24_000_000);
 
-    let gyro_spi = Spi::new(
+    static BUS: StaticCell<Mutex<NoopRawMutex, spi::Spi<embassy_stm32::mode::Async>>> =
+        StaticCell::new();
+    let bus = BUS.init(Mutex::new(spi::Spi::new(
         pins.gyro_spi,
         pins.gyro_sck,
         pins.gyro_mosi,
@@ -119,16 +112,17 @@ async fn main(spawner: Spawner) {
         pins.gyro_tx_dma,
         pins.gyro_rx_dma,
         gyro_spi_config,
-    );
+    )));
 
     let cs_pin = Output::new(pins.gyro_cs, Level::High, Speed::VeryHigh);
-    let bus = SpiBus::new(gyro_spi, CsPin(cs_pin), Delay);
-    let mpu6000 = MPU6000::new(bus);
-    let mpu6000_manager = Mpu6000Manager::new(mpu6000, Delay);
+    let spi_dev = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(bus, cs_pin);
+
+    let icm42688 = ICM42688::new(spi_dev);
+    let icm42688_manager = Icm42688Manager::new(icm42688, Delay).await.unwrap();
 
     // Gyro Filters setup
     let mut gyro_filter = GyroFilter::new(8000.0);
-    gyro_filter.set_calibration_params(200, 5.0, 0.2, 100.0, 100.0);
+    gyro_filter.set_calibration_params(200, 2.0, 0.2, 100.0, 100.0);
 
     // USB setup
     let mut usb_cfg = embassy_usb::Config::new(0x16c0, 0x27dd);
@@ -177,12 +171,10 @@ async fn main(spawner: Spawner) {
     let usb = builder.build();
 
     // Spawn tasks
-    spawner.spawn(led_task(led)).unwrap();
-    spawner
-        .spawn(gyro_task(mpu6000_manager, gyro_filter))
-        .unwrap();
-    spawner.spawn(usb_task(usb)).unwrap();
-    spawner.spawn(msp_task()).unwrap();
+    spawner.spawn(led_task(led).unwrap());
+    spawner.spawn(icm42688_task(icm42688_manager, gyro_filter).unwrap());
+    spawner.spawn(msp_task().unwrap());
+    spawner.spawn(usb_task(usb).unwrap());
 }
 
 // =================== CLOCK CONFIG ===================
