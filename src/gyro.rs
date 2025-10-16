@@ -1,15 +1,5 @@
-use embassy_time::{Delay, Duration, Timer};
-use embedded_hal::delay::DelayNs;
+use embassy_time::{Duration, Timer};
 use icm426xx::{Ready, Uninitialized, ICM42688};
-use mpu6000::bus::RegAccess;
-use mpu6000::registers::{AccelerometerSensitive, GyroSensitive};
-use mpu6000::{ClockSource, MPU6000};
-
-pub struct Mpu6000Manager<BUS, D> {
-    mpu: MPU6000<BUS>,
-    #[allow(dead_code)]
-    delay: D,
-}
 
 /// Configuration for ICM42688 gyroscope
 #[derive(Clone, Copy)]
