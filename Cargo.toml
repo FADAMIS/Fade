@@ -16,7 +16,7 @@ harness = false
 
 [features]
 
-default = ["stm32f"]
+default = ["stm32h7"]
 
 stm32f = ["embassy-stm32/stm32f722ic"]
 stm32h7 = ["embassy-stm32/stm32h743ag"]
@@ -33,16 +33,13 @@ static_cell = "2.1.0"
 embassy-sync = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
 embassy-usb = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
-embedded-hal-bus = { version = "0.1.0-alpha.1", features = ["async"] }
-embedded-hal-compat = "0.13.0"
 heapless = "0.7"
 icm426xx = { git = "https://github.com/FADAMIS/icm426xx.git", features = ["async"] }
 micromath = "2.1.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 semihosting = "0.1.20"
-mpu6000 = "0.3.0"
+crsf = "2.0.1"
 
 [dev-dependencies]
 defmt-test = "0.3"

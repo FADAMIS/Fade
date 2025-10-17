@@ -1,10 +1,13 @@
 #![no_main]
 #![no_std]
-
+use crsf::PacketParser;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::mode::Async;
 use embassy_stm32::spi;
 use embassy_stm32::time::Hertz;
+use embassy_stm32::usart;
+use embassy_stm32::usart::Uart;
 use embassy_stm32::usb;
 use embassy_stm32::{bind_interrupts, init};
 use embassy_stm32::{peripherals, usb::Driver};
@@ -26,12 +29,18 @@ use fade::board_config::SequireH7V2Pins as BoardPins;
 #[cfg(feature = "stm32f")]
 use fade::board_config::HGLRCF722Pins as BoardPins;
 
-bind_interrupts!(struct Irqs {
+bind_interrupts!(struct IrqsUsb {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+});
+
+bind_interrupts!(struct IrqsUart {
+    USART1 => usart::InterruptHandler<peripherals::USART1>;
 });
 
 // =================== CHANNELS ===================
 static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
+static MSP_RC_CH_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 4> = Channel::new();
+static MSP_RC_LINK_CHANNEL: Channel<ThreadModeRawMutex, crsf::LinkStatistics, 4> = Channel::new();
 
 // =================== USB CDC GLOBAL ===================
 static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>> = None;
@@ -69,6 +78,32 @@ async fn icm42688_task(
 }
 
 #[embassy_executor::task]
+async fn reciever_task(
+    mut uart_rx: usart::UartRx<'static, Async>,
+    mut _uart_tx: usart::UartTx<'static, Async>,
+) {
+    let mut parser = PacketParser::<256>::new();
+    let mut buf = [0u8; 1];
+    loop {
+        if let Ok(_) = uart_rx.read(&mut buf).await {
+            parser.push_bytes(&mut buf);
+        }
+        while let Some(packet) = parser.next_packet() {
+            let packet = packet.unwrap().1;
+            match packet {
+                crsf::Packet::RcChannels(ch) => {
+                    MSP_RC_CH_CHANNEL.send(ch.0).await;
+                }
+                crsf::Packet::LinkStatistics(stats) => {
+                    MSP_RC_LINK_CHANNEL.send(stats).await;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
 async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_OTG_FS>>) {
     usb.run().await;
 }
@@ -77,6 +112,8 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
 async fn msp_task() {
     loop {
         let gyro = MSP_GYRO_CHANNEL.receive().await;
+        let rc_rx = MSP_RC_CH_CHANNEL.receive().await;
+        let rc_link = MSP_RC_LINK_CHANNEL.receive().await;
 
         let mut buf = heapless::String::<64>::new();
         use core::fmt::Write;
@@ -124,6 +161,25 @@ async fn main(spawner: Spawner) {
     let mut gyro_filter = GyroFilter::new(8000.0);
     gyro_filter.set_calibration_params(200, 2.0, 0.2, 100.0, 100.0);
 
+    let mut uart_config = usart::Config::default();
+    uart_config.baudrate = 420_000;
+    uart_config.parity = usart::Parity::ParityNone;
+    uart_config.stop_bits = usart::StopBits::STOP1;
+    uart_config.data_bits = usart::DataBits::DataBits8;
+
+    // Reciever setup
+    let (uart1_tx, uart1_rx) = Uart::new(
+        pins.uart1,
+        pins.uart1_rx,
+        pins.uart1_tx,
+        IrqsUart,
+        pins.uart1_tx_dma,
+        pins.uart1_rx_dma,
+        uart_config,
+    )
+    .unwrap()
+    .split();
+
     // USB setup
     let mut usb_cfg = embassy_usb::Config::new(0x16c0, 0x27dd);
     usb_cfg.manufacturer = Some("Fade");
@@ -143,7 +199,7 @@ async fn main(spawner: Spawner) {
     let usb_driver = unsafe {
         Driver::new_fs(
             pins.usb_otg_fs,
-            Irqs,
+            IrqsUsb,
             pins.usb_dp,
             pins.usb_dm,
             #[allow(static_mut_refs)]
@@ -173,6 +229,7 @@ async fn main(spawner: Spawner) {
     // Spawn tasks
     spawner.spawn(led_task(led).unwrap());
     spawner.spawn(icm42688_task(icm42688_manager, gyro_filter).unwrap());
+    spawner.spawn(reciever_task(uart1_rx, uart1_tx).unwrap());
     spawner.spawn(msp_task().unwrap());
     spawner.spawn(usb_task(usb).unwrap());
 }

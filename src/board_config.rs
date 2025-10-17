@@ -12,8 +12,13 @@ pub struct SequireH7V2Pins {
     pub gyro_sck: Peri<'static, PB13>,
     pub gyro_mosi: Peri<'static, PB15>,
     pub gyro_miso: Peri<'static, PB14>,
-    pub gyro_tx_dma: Peri<'static, DMA1_CH3>,
-    pub gyro_rx_dma: Peri<'static, DMA1_CH4>,
+    pub gyro_tx_dma: Peri<'static, DMA1_CH0>,
+    pub gyro_rx_dma: Peri<'static, DMA1_CH1>,
+    pub uart1: Peri<'static, USART1>,
+    pub uart1_tx: Peri<'static, PA9>,
+    pub uart1_rx: Peri<'static, PA10>,
+    pub uart1_tx_dma: Peri<'static, DMA1_CH2>,
+    pub uart1_rx_dma: Peri<'static, DMA1_CH3>,
 }
 
 impl SequireH7V2Pins {
@@ -28,8 +33,13 @@ impl SequireH7V2Pins {
             gyro_sck: p.PB13,
             gyro_mosi: p.PB15,
             gyro_miso: p.PB14,
-            gyro_tx_dma: p.DMA1_CH3,
-            gyro_rx_dma: p.DMA1_CH4,
+            gyro_tx_dma: p.DMA1_CH0,
+            gyro_rx_dma: p.DMA1_CH1,
+            uart1: p.USART1,
+            uart1_tx: p.PA9,
+            uart1_rx: p.PA10,
+            uart1_tx_dma: p.DMA1_CH2,
+            uart1_rx_dma: p.DMA1_CH3,
         }
     }
 }
