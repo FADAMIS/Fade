@@ -40,6 +40,7 @@ micromath = "2.1.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 semihosting = "0.1.20"
 crsf = "2.0.1"
+embassy-futures = "0.1.2"
 
 [dev-dependencies]
 defmt-test = "0.3"

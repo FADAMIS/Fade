@@ -22,6 +22,7 @@ use fade::filters::GyroFilter;
 use fade::gyro::Icm42688Manager;
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
+use embassy_futures::select::{select, Either};
 
 #[cfg(feature = "stm32h7")]
 use fade::board_config::SequireH7V2Pins as BoardPins;
@@ -39,8 +40,8 @@ bind_interrupts!(struct IrqsUart {
 
 // =================== CHANNELS ===================
 static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
-static MSP_RC_CH_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 4> = Channel::new();
-static MSP_RC_LINK_CHANNEL: Channel<ThreadModeRawMutex, crsf::LinkStatistics, 4> = Channel::new();
+static RC_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 16> = Channel::new();
+static LINK_STATS_CHANNEL: Channel<ThreadModeRawMutex, u8, 4> = Channel::new();
 
 // =================== USB CDC GLOBAL ===================
 static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>> = None;
@@ -86,18 +87,30 @@ async fn reciever_task(
     let mut buf = [0u8; 1];
     loop {
         if let Ok(_) = uart_rx.read(&mut buf).await {
-            parser.push_bytes(&mut buf);
-        }
-        while let Some(packet) = parser.next_packet() {
-            let packet = packet.unwrap().1;
-            match packet {
-                crsf::Packet::RcChannels(ch) => {
-                    MSP_RC_CH_CHANNEL.send(ch.0).await;
+            parser.push_bytes(&buf);
+
+            let mut packet_count = 0;
+            while let Some(packet_result) = parser.next_packet() {
+                if let Ok((_consumed, packet)) = packet_result {
+                    match packet {
+                        crsf::Packet::RcChannels(ch) => {
+                            // Send RC channels to USB task
+                            RC_CHANNEL.send(ch.0).await;
+                        }
+                        crsf::Packet::LinkStatistics(stats) => {
+                            LINK_STATS_CHANNEL.send(stats.uplink_link_quality).await;
+                        }
+                        _ => {
+                            RC_CHANNEL.send([0; 16]).await;
+                        }
+                    }
                 }
-                crsf::Packet::LinkStatistics(stats) => {
-                    MSP_RC_LINK_CHANNEL.send(stats).await;
+                
+                packet_count += 1;
+                if packet_count >= 3 {
+                    Timer::after(Duration::from_micros(10)).await;
+                    break;
                 }
-                _ => {}
             }
         }
     }
@@ -110,14 +123,24 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
 
 #[embassy_executor::task]
 async fn msp_task() {
+    let mut stats = 0u8;
+    let mut rx_channels = [0u16; 16];
+    
     loop {
-        let gyro = MSP_GYRO_CHANNEL.receive().await;
-        let rc_rx = MSP_RC_CH_CHANNEL.receive().await;
-        let rc_link = MSP_RC_LINK_CHANNEL.receive().await;
+        // Non-blocking: receive whichever data arrives first
+        match select(LINK_STATS_CHANNEL.receive(), RC_CHANNEL.receive()).await {
+            Either::First(new_stats) => {
+                stats = new_stats;
+            }
+            Either::Second(new_channels) => {
+                rx_channels = new_channels;
+            }
+        }
 
-        let mut buf = heapless::String::<64>::new();
+        let mut buf = heapless::String::<128>::new();
         use core::fmt::Write;
-        let _ = write!(&mut buf, "{:.3},{:.3},{:.3}\r\n", gyro[0], gyro[1], gyro[2]);
+        let _ = write!(&mut buf, "LQ:{}, CH1: {}, CH2: {}, CH3: {}, CH4: {}\r\n", 
+            stats, rx_channels[0], rx_channels[1], rx_channels[2], rx_channels[3]);
 
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
