@@ -1,7 +1,10 @@
 #![no_main]
 #![no_std]
+
+use core::sync::atomic::{AtomicBool, Ordering};
 use crsf::PacketParser;
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::mode::Async;
 use embassy_stm32::spi;
@@ -11,10 +14,13 @@ use embassy_stm32::usart::Uart;
 use embassy_stm32::usb;
 use embassy_stm32::{bind_interrupts, init};
 use embassy_stm32::{peripherals, usb::Driver};
-use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Delay, Duration, Timer};
+use embassy_sync::signal::Signal;
+use embassy_time::Delay;
+use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
@@ -22,7 +28,6 @@ use fade::filters::GyroFilter;
 use fade::gyro::Icm42688Manager;
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
-use embassy_futures::select::{select, Either};
 
 #[cfg(feature = "stm32h7")]
 use fade::board_config::SequireH7V2Pins as BoardPins;
@@ -38,10 +43,14 @@ bind_interrupts!(struct IrqsUart {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
 });
 
+// =================== BOOTLOADER ===================
+
 // =================== CHANNELS ===================
-static MSP_GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
+static GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
 static RC_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 16> = Channel::new();
 static LINK_STATS_CHANNEL: Channel<ThreadModeRawMutex, u8, 4> = Channel::new();
+static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
 // =================== USB CDC GLOBAL ===================
 static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>> = None;
@@ -51,10 +60,16 @@ static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::U
 #[embassy_executor::task]
 async fn led_task(mut led: Output<'static>) {
     loop {
-        led.set_high();
-        Timer::after(Duration::from_millis(500)).await;
-        led.set_low();
-        Timer::after(Duration::from_millis(500)).await;
+        let work = async {
+            led.set_high();
+            Timer::after(Duration::from_millis(500)).await;
+            led.set_low();
+            Timer::after(Duration::from_millis(500)).await;
+        };
+        match select(work, SHUTDOWN_SIGNAL.wait()).await {
+            Either::First(_) => { /* did one blink cycle */ }
+            Either::Second(_) => break,
+        }
     }
 }
 
@@ -71,9 +86,29 @@ async fn icm42688_task(
     mut filter: GyroFilter,
 ) {
     loop {
-        if let Ok(raw_gyro) = gyro.read_gyro().await {
-            let filtered_gyro = filter.update(raw_gyro);
-            MSP_GYRO_CHANNEL.send(filtered_gyro).await;
+        // race gyro read vs shutdown
+        match select(gyro.read_gyro(), SHUTDOWN_SIGNAL.wait()).await {
+            Either::First(Ok(raw_gyro)) => {
+                let filtered = filter.update(raw_gyro);
+                // race send vs shutdown
+                match select(GYRO_CHANNEL.send(filtered), SHUTDOWN_SIGNAL.wait()).await {
+                    Either::First(_) => {}
+                    Either::Second(_) => break,
+                }
+            }
+            Either::First(Err(_e)) => {
+                // read error; small backoff but still cancellable
+                match select(
+                    Timer::after(Duration::from_millis(5)),
+                    SHUTDOWN_SIGNAL.wait(),
+                )
+                .await
+                {
+                    Either::First(_) => {}
+                    Either::Second(_) => break,
+                }
+            }
+            Either::Second(_) => break, // shutdown
         }
     }
 }
@@ -85,67 +120,106 @@ async fn reciever_task(
 ) {
     let mut parser = PacketParser::<256>::new();
     let mut buf = [0u8; 1];
-    loop {
-        if let Ok(_) = uart_rx.read(&mut buf).await {
-            parser.push_bytes(&buf);
 
-            let mut packet_count = 0;
-            while let Some(packet_result) = parser.next_packet() {
-                if let Ok((_consumed, packet)) = packet_result {
-                    match packet {
-                        crsf::Packet::RcChannels(ch) => {
-                            // Send RC channels to USB task
-                            RC_CHANNEL.send(ch.0).await;
-                        }
-                        crsf::Packet::LinkStatistics(stats) => {
-                            LINK_STATS_CHANNEL.send(stats.uplink_link_quality).await;
-                        }
-                        _ => {
-                            RC_CHANNEL.send([0; 16]).await;
+    loop {
+        match select(uart_rx.read(&mut buf), SHUTDOWN_SIGNAL.wait()).await {
+            Either::First(Ok(())) => {
+                parser.push_bytes(&buf);
+
+                let mut packet_count = 0;
+                while let Some(packet_result) = parser.next_packet() {
+                    if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    if let Ok((_consumed, packet)) = packet_result {
+                        match packet {
+                            crsf::Packet::RcChannels(ch) => {
+                                // send is awaitable; make it cancelable
+                                match select(RC_CHANNEL.send(ch.0), SHUTDOWN_SIGNAL.wait()).await {
+                                    Either::First(_) => {}
+                                    Either::Second(_) => break,
+                                }
+                            }
+                            crsf::Packet::LinkStatistics(stats) => {
+                                match select(
+                                    LINK_STATS_CHANNEL.send(stats.uplink_link_quality),
+                                    SHUTDOWN_SIGNAL.wait(),
+                                )
+                                .await
+                                {
+                                    Either::First(_) => {}
+                                    Either::Second(_) => break,
+                                }
+                            }
+                            _ => {
+                                match select(RC_CHANNEL.send([0; 16]), SHUTDOWN_SIGNAL.wait()).await
+                                {
+                                    Either::First(_) => {}
+                                    Either::Second(_) => break,
+                                }
+                            }
                         }
                     }
-                }
-                
-                packet_count += 1;
-                if packet_count >= 3 {
-                    Timer::after(Duration::from_micros(10)).await;
-                    break;
+
+                    packet_count += 1;
+                    if packet_count >= 3 {
+                        // short cancelable delay so shutdown can be observed
+                        match select(
+                            Timer::after(Duration::from_micros(10)),
+                            SHUTDOWN_SIGNAL.wait(),
+                        )
+                        .await
+                        {
+                            Either::First(_) => {}
+                            Either::Second(_) => break,
+                        }
+                        break;
+                    }
                 }
             }
+            Either::First(Err(_)) => {
+                // read error -> short backoff, but cancellable
+                match select(
+                    Timer::after(Duration::from_millis(1)),
+                    SHUTDOWN_SIGNAL.wait(),
+                )
+                .await
+                {
+                    Either::First(_) => {}
+                    Either::Second(_) => break,
+                }
+            }
+            Either::Second(_) => break,
         }
     }
 }
 
 #[embassy_executor::task]
 async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_OTG_FS>>) {
-    usb.run().await;
+    // race the usb.run future with shutdown
+    match select(usb.run(), SHUTDOWN_SIGNAL.wait()).await {
+        Either::First(_) => {}
+        Either::Second(_) => {
+            drop(usb);
+        }
+    }
 }
 
 #[embassy_executor::task]
-async fn msp_task() {
-    let mut stats = 0u8;
-    let mut rx_channels = [0u16; 16];
-    
+async fn ngchl_task() {
     loop {
-        // Non-blocking: receive whichever data arrives first
-        match select(LINK_STATS_CHANNEL.receive(), RC_CHANNEL.receive()).await {
-            Either::First(new_stats) => {
-                stats = new_stats;
-            }
-            Either::Second(new_channels) => {
-                rx_channels = new_channels;
-            }
-        }
+        let gyro = GYRO_CHANNEL.receive().await;
+        let rx_channels = RC_CHANNEL.receive().await;
+        let rx_lq = LINK_STATS_CHANNEL.receive().await;
 
-        let mut buf = heapless::String::<128>::new();
-        use core::fmt::Write;
-        let _ = write!(&mut buf, "LQ:{}, CH1: {}, CH2: {}, CH3: {}, CH4: {}\r\n", 
-            stats, rx_channels[0], rx_channels[1], rx_channels[2], rx_channels[3]);
+        let mut buf = [0u8; 1];
 
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
-            let _ = class.write_packet(buf.as_bytes()).await;
+            let _ = class.read_packet(&mut buf);
         }
+        Timer::after(Duration::from_millis(1)).await;
     }
 }
 
@@ -250,11 +324,13 @@ async fn main(spawner: Spawner) {
     let usb = builder.build();
 
     // Spawn tasks
-    spawner.spawn(led_task(led).unwrap());
-    spawner.spawn(icm42688_task(icm42688_manager, gyro_filter).unwrap());
-    spawner.spawn(reciever_task(uart1_rx, uart1_tx).unwrap());
-    spawner.spawn(msp_task().unwrap());
-    spawner.spawn(usb_task(usb).unwrap());
+    spawner.spawn(led_task(led)).unwrap();
+    spawner
+        .spawn(icm42688_task(icm42688_manager, gyro_filter))
+        .unwrap();
+    spawner.spawn(reciever_task(uart1_rx, uart1_tx)).unwrap();
+    spawner.spawn(ngchl_task()).unwrap();
+    spawner.spawn(usb_task(usb)).unwrap();
 }
 
 // =================== CLOCK CONFIG ===================

@@ -56,6 +56,11 @@ pub struct HGLRCF722Pins {
     pub gyro_miso: Peri<'static, PA6>,
     pub gyro_tx_dma: Peri<'static, DMA2_CH3>,
     pub gyro_rx_dma: Peri<'static, DMA2_CH0>,
+    pub uart1: Peri<'static, USART1>,
+    pub uart1_tx: Peri<'static, PA9>,
+    pub uart1_rx: Peri<'static, PA10>,
+    pub uart1_tx_dma: Peri<'static, DMA2_CH7>,
+    pub uart1_rx_dma: Peri<'static, DMA2_CH2>,
 }
 
 impl HGLRCF722Pins {
@@ -72,6 +77,11 @@ impl HGLRCF722Pins {
             gyro_miso: p.PA6,
             gyro_tx_dma: p.DMA2_CH3,
             gyro_rx_dma: p.DMA2_CH0,
+            uart1: p.USART1,
+            uart1_tx: p.PA9,
+            uart1_rx: p.PA10,
+            uart1_tx_dma: p.DMA2_CH7,
+            uart1_rx_dma: p.DMA2_CH2,
         }
     }
 }

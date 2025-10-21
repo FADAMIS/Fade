@@ -26,13 +26,13 @@ cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single
 cortex-m-rt = "0.7"
 defmt = "1.0"
 defmt-rtt = "1.0"
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", branch = "main", features = ["arch-cortex-m", "executor-thread"] }
-embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", branch = "main", features = ["defmt", "time-driver-any", "exti", "memory-x", "unstable-pac"] }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread"] }
+embassy-stm32 = { version = "0.4.0", features = ["defmt", "time-driver-any", "exti", "memory-x", "unstable-pac"] }
+embassy-embedded-hal = "0.5.0"
 static_cell = "2.1.0"
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", branch = "main" }
+embassy-sync = "0.7.2"
+embassy-time = "0.5.0"
+embassy-usb = "0.5.1"
 embedded-hal-async = "1.0.0"
 heapless = "0.7"
 icm426xx = { git = "https://github.com/FADAMIS/icm426xx.git", features = ["async"] }
