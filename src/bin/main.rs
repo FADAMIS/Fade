@@ -209,9 +209,9 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
 #[embassy_executor::task]
 async fn ngchl_task() {
     loop {
-        let gyro = GYRO_CHANNEL.receive().await;
-        let rx_channels = RC_CHANNEL.receive().await;
-        let rx_lq = LINK_STATS_CHANNEL.receive().await;
+        let _gyro = GYRO_CHANNEL.receive().await;
+        let _rx_channels = RC_CHANNEL.receive().await;
+        let _rx_lq = LINK_STATS_CHANNEL.receive().await;
 
         let mut buf = [0u8; 1];
 
