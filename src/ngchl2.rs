@@ -33,7 +33,7 @@ pub struct NgChl2Parser {
     state: State,
     checksum: bool,
     last_packet: Vec<u8, 4>,
-    commands: [u8; 3],
+    commands: [u8; 4],
     command_packet: NgChl2Packet,
     command_ready: bool,
 }
@@ -44,7 +44,7 @@ impl NgChl2Parser {
             state: State::Command,
             checksum: false,
             last_packet: Vec::new(),
-            commands: [0x67, 0x69, 0xDF],
+            commands: [0x67, 0x69, 0xDF, 0xFE],
             command_packet: NgChl2Packet {
                 command: 0,
                 key: 0,
@@ -99,10 +99,16 @@ impl NgChl2Parser {
                         value: 0.0,
                     };
                     self.command_packet.command = self.last_packet[0];
-                    self.last_packet.clear();
-                    self.state = State::Key;
-                    self.checksum = false;
-                    NgChl2Responses::Ack
+                    if self.last_packet[0] == 0xDF || self.last_packet[0] == 0xFE {
+                        self.last_packet.clear();
+                        self.checksum = false;
+                        NgChl2Responses::Ack
+                    } else {
+                        self.last_packet.clear();
+                        self.state = State::Key;
+                        self.checksum = false;
+                        NgChl2Responses::Ack
+                    }
                 } else {
                     self.last_packet.clear();
                     self.state = State::Command;
@@ -145,8 +151,8 @@ impl NgChl2Parser {
     }
     fn xor(n: usize, data: &[u8], complement: u8) -> u8 {
         let mut result = 0;
-        for i in 0..n - 1 {
-            result ^= data[i];
+        for &byte in &data[..n] {
+            result ^= byte;
         }
         result ^ complement
     }
