@@ -26,6 +26,8 @@ use embassy_usb::{Builder, UsbDevice};
 use fade as _;
 use fade::filters::GyroFilter;
 use fade::gyro::Icm42688Manager;
+use fade::ngchl2::NgChl2Parser;
+use fade::ngchl2::NgChl2Responses;
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
 
@@ -208,16 +210,24 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
 
 #[embassy_executor::task]
 async fn ngchl_task() {
+    let mut ngchl2_parser = NgChl2Parser::new();
     loop {
         let _gyro = GYRO_CHANNEL.receive().await;
         let _rx_channels = RC_CHANNEL.receive().await;
         let _rx_lq = LINK_STATS_CHANNEL.receive().await;
 
-        let mut buf = [0u8; 1];
+        let mut buf = [0u8; 4];
 
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
-            let _ = class.read_packet(&mut buf);
+            class.read_packet(&mut buf).await.unwrap();
+            let res = ngchl2_parser.process_byte(buf[0]);
+            let command = ngchl2_parser.get_command();
+            if command.ready {}
+            if res != NgChl2Responses::None {
+                let res_byte = [res as u8];
+                class.write_packet(&res_byte).await.unwrap();
+            }
         }
         Timer::after(Duration::from_millis(1)).await;
     }

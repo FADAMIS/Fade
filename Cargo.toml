@@ -9,10 +9,15 @@ version = "0.1.0"
 # If you use a standard main.rs file the following is sufficient:
 [[bin]]
 name = "main"
+path = "src/main.rs"
 test = false
-
+doctest = false
+bench = false
 [lib]
+name = "fade"
+test = false
 harness = false
+doctest = false
 
 [features]
 

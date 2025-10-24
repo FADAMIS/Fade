@@ -5,7 +5,7 @@ pub mod board_config;
 pub mod config;
 pub mod filters;
 pub mod gyro;
-pub mod msp;
+pub mod ngchl2;
 pub mod pid;
 
 use embassy_stm32 as _;

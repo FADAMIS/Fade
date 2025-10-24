@@ -10,10 +10,23 @@ pub enum State {
 }
 
 #[repr(u8)]
+#[derive(PartialEq)]
 pub enum NgChl2Responses {
     Ack = 0x0A,
     Nack = 0xC4,
     None,
+}
+
+#[derive(Clone)]
+pub struct NgChl2Packet {
+    command: u8,
+    key: u16,
+    value: f32,
+}
+
+pub struct NgChl2Result {
+    pub command: NgChl2Packet,
+    pub ready: bool,
 }
 
 pub struct NgChl2Parser {
@@ -21,6 +34,8 @@ pub struct NgChl2Parser {
     checksum: bool,
     last_packet: Vec<u8, 4>,
     commands: [u8; 3],
+    command_packet: NgChl2Packet,
+    command_ready: bool,
 }
 
 impl NgChl2Parser {
@@ -30,6 +45,12 @@ impl NgChl2Parser {
             checksum: false,
             last_packet: Vec::new(),
             commands: [0x67, 0x69, 0xDF],
+            command_packet: NgChl2Packet {
+                command: 0,
+                key: 0,
+                value: 0.0,
+            },
+            command_ready: false,
         }
     }
     pub fn process_byte(&mut self, byte: u8) -> NgChl2Responses {
@@ -37,6 +58,7 @@ impl NgChl2Parser {
             match self.state {
                 State::Command => {
                     if self.commands.contains(&byte) {
+                        self.command_ready = false;
                         self.last_packet.push(byte).unwrap();
                         self.checksum = true;
                         NgChl2Responses::None
@@ -70,7 +92,13 @@ impl NgChl2Parser {
     pub fn checksum(&mut self, complement: u8) -> NgChl2Responses {
         match self.state {
             State::Command => {
-                if self.last_packet[0] ^ self.last_packet[0] == complement {
+                if self.last_packet[0] ^ complement == 0xFF {
+                    self.command_packet = NgChl2Packet {
+                        command: 0,
+                        key: 0,
+                        value: 0.0,
+                    };
+                    self.command_packet.command = self.last_packet[0];
                     self.last_packet.clear();
                     self.state = State::Key;
                     self.checksum = false;
@@ -83,7 +111,9 @@ impl NgChl2Parser {
                 }
             }
             State::Key => {
-                if self.last_packet[0] ^ self.last_packet[1] == complement {
+                if Self::xor(2, &self.last_packet, complement) == 0xFF {
+                    let array: [u8; 2] = self.last_packet[0..2].try_into().unwrap();
+                    self.command_packet.key = u16::from_be_bytes(array);
                     self.last_packet.clear();
                     self.state = State::Value;
                     self.checksum = false;
@@ -96,13 +126,11 @@ impl NgChl2Parser {
                 }
             }
             State::Value => {
-                if self.last_packet[0]
-                    ^ self.last_packet[1]
-                    ^ self.last_packet[2]
-                    ^ self.last_packet[3]
-                    == complement
-                {
+                if Self::xor(4, &self.last_packet, complement) == 0xFF {
+                    let array: [u8; 4] = self.last_packet.clone().into_array().unwrap();
+                    self.command_packet.value = f32::from_be_bytes(array);
                     self.last_packet.clear();
+                    self.command_ready = true;
                     self.state = State::Command;
                     self.checksum = false;
                     NgChl2Responses::Ack
@@ -113,6 +141,19 @@ impl NgChl2Parser {
                     NgChl2Responses::Nack
                 }
             }
+        }
+    }
+    fn xor(n: usize, data: &[u8], complement: u8) -> u8 {
+        let mut result = 0;
+        for i in 0..n - 1 {
+            result ^= data[i];
+        }
+        result ^ complement
+    }
+    pub fn get_command(&mut self) -> NgChl2Result {
+        NgChl2Result {
+            command: self.command_packet.clone(),
+            ready: self.command_ready,
         }
     }
 }
