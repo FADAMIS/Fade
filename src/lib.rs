@@ -3,9 +3,11 @@
 
 pub mod board_config;
 pub mod config;
+pub mod dshot;
 pub mod filters;
+pub mod fsp;
 pub mod gyro;
-pub mod ngchl2;
+pub mod mixer;
 pub mod pid;
 
 use embassy_stm32 as _;

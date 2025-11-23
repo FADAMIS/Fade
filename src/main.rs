@@ -25,9 +25,8 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
 use fade::filters::GyroFilter;
+use fade::fsp::Fsp;
 use fade::gyro::Icm42688Manager;
-use fade::ngchl2::NgChl2Parser;
-use fade::ngchl2::NgChl2Responses;
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
 
@@ -207,34 +206,23 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
         }
     }
 }
-
 #[embassy_executor::task]
-async fn ngchl_task() {
-    let mut ngchl2_parser = NgChl2Parser::new();
+async fn fsp_task() {
+    let mut fsp = Fsp::new();
+    let mut buf = [0u8; 1];
+    Timer::after(Duration::from_secs(1)).await;
     loop {
-        let mut buf = [0u8; 1];
-
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
-            match select(
-                class.read_packet(&mut buf),
-                Timer::after(Duration::from_millis(100)),
-            )
-            .await
-            {
-                Either::First(Ok(_)) => {
-                    let res = ngchl2_parser.process_byte(buf[0]);
-                    let command = ngchl2_parser.get_command();
-                    if command.ready {}
-                    if res != NgChl2Responses::None {
-                        let res_byte = [res as u8];
-                        let _ = class.write_packet(&res_byte).await;
-                    }
-                }
-                Either::First(Err(_)) => {
-                    Timer::after(Duration::from_millis(10)).await;
-                }
-                Either::Second(_) => {}
+            class.read_packet(&mut buf).await.unwrap();
+            let res = fsp.parse(buf[0]);
+            if res != None && res.clone().unwrap().len() != 1 {
+                class.write_packet(res.unwrap().as_slice()).await.unwrap();
+            } else if res != None && res.clone().unwrap().len() == 1 {
+                class
+                    .write_packet(&[res.unwrap().as_slice()[0]])
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -346,8 +334,8 @@ async fn main(spawner: Spawner) {
         .spawn(icm42688_task(icm42688_manager, gyro_filter))
         .unwrap();
     spawner.spawn(reciever_task(uart1_rx, uart1_tx)).unwrap();
-    spawner.spawn(ngchl_task()).unwrap();
     spawner.spawn(usb_task(usb)).unwrap();
+    spawner.spawn(fsp_task()).unwrap();
 }
 
 // =================== CLOCK CONFIG ===================
