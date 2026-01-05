@@ -1,6 +1,6 @@
 import serial
 import sys
-import time
+import struct
 
 if len(sys.argv) < 3:
     print("Usage: python listener.py <port> <baudrate>")
@@ -9,20 +9,28 @@ if len(sys.argv) < 3:
 port = sys.argv[1]
 baudrate = int(sys.argv[2])
 
-ser = serial.Serial(port, baudrate, timeout=5)
+ser = serial.Serial(port, baudrate, timeout=1)
 ser.dtr = True
 ser.rts = True
 ser.flush()
 
 # Send data byte 0x69, then checksum 0xD4 (for 105.0 f32)
-print("Sending 0x69 0xD4")
-ser.write(b'\x69\xD4')
-ser.flush()
-time.sleep(0.1)
+print("Sending Commands")
 
-# Read response
-print("Reading response")
-response = ser.read(10)
-print("Response:", response.hex() if response else "No response")
+cmds = [b'\x69', b'\x96', b'\x01', b'\x01', b'\x00']
+
+for cmd in cmds:
+    ser.write(cmd)
+    print(ser.read())
+
+f32list = [];
+for i in range(0, 4):
+    f32list.append(ser.read())
+
+print(f32list)
+
+byte_data = bytes([b[0] for b in f32list])
+
+print(struct.unpack(">f", byte_data)[0])
 
 ser.close()

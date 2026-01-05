@@ -104,7 +104,7 @@ impl DShotManager {
         buffer[16] = 0;
         buffer[17] = 0;
     }
-    
+
     /// Writes throttle values to the ESCs.
     /// In a real implementation, this would configure and start the DMA transfer.
     pub fn write_throttles(&self, throttles: [u16; 4], dma_buffers: &mut [[u32; 18]; 4]) {
@@ -124,7 +124,6 @@ impl DShotManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_prepare_frame_zero_throttle() {
@@ -143,7 +142,7 @@ mod tests {
         // Full frame: 0011 0000 0000 0011 -> 0x3003
         assert_eq!(frame, 0b0011000000000011);
     }
-    
+
     #[test]
     fn test_prepare_frame_max_throttle() {
         // Throttle 2000 should map to 2047
@@ -167,26 +166,26 @@ mod tests {
         // Full frame: 1000 0010 1111 0101 -> 0x82F5
         assert_eq!(frame, 0b1000001011110101);
     }
-    
+
     #[test]
     fn test_encode_frame() {
         let manager = DShotManager::new(DShotSpeed::DShot600, 120_000_000);
         let t0h = manager.t0h;
         let t1h = manager.t1h;
-        
+
         let frame = 0b1010_0000_0000_0000; // A simple pattern
         let mut buffer = [0u32; 18];
         manager.encode_frame(frame, &mut buffer);
-        
+
         assert_eq!(buffer[0], t1h);
         assert_eq!(buffer[1], t0h);
         assert_eq!(buffer[2], t1h);
         assert_eq!(buffer[3], t0h);
-        
+
         for i in 4..16 {
             assert_eq!(buffer[i], t0h);
         }
-        
+
         // trailing zeros
         assert_eq!(buffer[16], 0);
         assert_eq!(buffer[17], 0);

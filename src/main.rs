@@ -238,6 +238,7 @@ async fn main(spawner: Spawner) {
     let led = Output::new(pins.led_pin, Level::Low, Speed::Low);
 
     // Gyro setup
+
     let mut gyro_spi_config = spi::Config::default();
     gyro_spi_config.frequency = Hertz(24_000_000);
 
