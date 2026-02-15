@@ -9,9 +9,7 @@ if len(sys.argv) < 3:
 port = sys.argv[1]
 baudrate = int(sys.argv[2])
 
-ser = serial.Serial(port, baudrate, timeout=1)
-ser.dtr = True
-ser.rts = True
+ser = serial.Serial(port, baudrate, timeout=0.001)
 ser.flush()
 
 # Send data byte 0x69, then checksum 0xD4 (for 105.0 f32)

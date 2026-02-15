@@ -5,6 +5,8 @@ pub mod board_config;
 pub mod config;
 pub mod dshot;
 pub mod filters;
+pub mod flash;
+pub mod flight_control;
 pub mod fsp;
 pub mod gyro;
 pub mod mixer;

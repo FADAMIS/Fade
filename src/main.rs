@@ -24,8 +24,11 @@ use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
+use fade::config::FlightConfig;
 use fade::filters::GyroFilter;
-use fade::fsp::Fsp;
+use fade::flash;
+use fade::flight_control::FlightController;
+use fade::fsp::{Fsp, SAVE_FLAG};
 use fade::gyro::Icm42688Manager;
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
@@ -44,8 +47,6 @@ bind_interrupts!(struct IrqsUart {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
 });
 
-// =================== BOOTLOADER ===================
-
 // =================== CHANNELS ===================
 static GYRO_CHANNEL: Channel<ThreadModeRawMutex, [f32; 3], 4> = Channel::new();
 static RC_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 16> = Channel::new();
@@ -53,8 +54,14 @@ static LINK_STATS_CHANNEL: Channel<ThreadModeRawMutex, u8, 4> = Channel::new();
 static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
+// =================== SHARED STATE ===================
+static CONFIG: StaticCell<Mutex<ThreadModeRawMutex, FlightConfig>> = StaticCell::new();
+
 // =================== USB CDC GLOBAL ===================
 static mut CDC_CLASS: Option<CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>> = None;
+
+// =================== SAVE SIGNAL ===================
+static SAVE_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
 // =================== TASKS ===================
 
@@ -206,8 +213,9 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
         }
     }
 }
+
 #[embassy_executor::task]
-async fn fsp_task() {
+async fn fsp_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
     let mut fsp = Fsp::new();
     let mut buf = [0u8; 1];
     Timer::after(Duration::from_secs(1)).await;
@@ -215,15 +223,84 @@ async fn fsp_task() {
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
             class.read_packet(&mut buf).await.unwrap();
-            let res = fsp.parse(buf[0]);
-            if res != None && res.clone().unwrap().len() != 1 {
-                class.write_packet(res.unwrap().as_slice()).await.unwrap();
-            } else if res != None && res.clone().unwrap().len() == 1 {
-                class
-                    .write_packet(&[res.unwrap().as_slice()[0]])
-                    .await
-                    .unwrap();
+
+            let res = {
+                let mut cfg = config.lock().await;
+                fsp.parse(buf[0], &mut cfg)
+            };
+
+            if let Some(ref data) = res {
+                if !data.is_empty() {
+                    // Check if this is a save-to-flash signal
+                    if data[0] == SAVE_FLAG {
+                        SAVE_SIGNAL.signal(());
+                        // Send ACK back to configurator
+                        class.write_packet(&[0x0A]).await.unwrap();
+                    } else if data.len() == 1 {
+                        class.write_packet(&[data[0]]).await.unwrap();
+                    } else {
+                        class.write_packet(data.as_slice()).await.unwrap();
+                    }
+                }
             }
+        }
+    }
+}
+
+/// Flash save task — waits for a save signal, then writes config to flash
+#[embassy_executor::task]
+async fn flash_save_task(
+    mut flash_peripheral: embassy_stm32::flash::Flash<'static, embassy_stm32::flash::Blocking>,
+    config: &'static Mutex<ThreadModeRawMutex, FlightConfig>,
+) {
+    loop {
+        SAVE_SIGNAL.wait().await;
+
+        let cfg = {
+            let cfg_lock = config.lock().await;
+            cfg_lock.clone()
+        };
+
+        let _ = flash::save_config_to_flash(&mut flash_peripheral, &cfg);
+    }
+}
+
+/// Flight control task — reads gyro + RC, runs PID, outputs DShot
+#[embassy_executor::task]
+async fn flight_control_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
+    // Initialize flight controller from config
+    let fc = {
+        let cfg = config.lock().await;
+        FlightController::new(&cfg)
+    };
+
+    // We need fc to be mutable, move it out
+    let mut fc = fc;
+
+    loop {
+        // Wait for new gyro data (runs at gyro rate ~8kHz)
+        let gyro_recv = async { GYRO_CHANNEL.receive().await };
+
+        match select(gyro_recv, SHUTDOWN_SIGNAL.wait()).await {
+            Either::First(gyro_data) => {
+                // Check for new RC data (non-blocking)
+                if let Ok(rc_data) = RC_CHANNEL.try_receive() {
+                    fc.update_rc(rc_data);
+                }
+
+                // Run PID loop + mixer + DShot encode
+                let _dma_buffers = fc.update(gyro_data);
+
+                // TODO: Actually start DMA transfer to timer CCRs here.
+                // This requires the timer + DMA peripherals to be passed in.
+                // For now the DMA buffers are prepared and ready.
+                //
+                // Example (hardware-specific, needs real pin/timer setup):
+                // for (ch, buf) in dma_buffers.iter().enumerate() {
+                //     dma.start_transfer(timer.ccr(ch), buf);
+                // }
+            }
+            Either::Second(_) => break,
         }
     }
 }
@@ -237,8 +314,13 @@ async fn main(spawner: Spawner) {
     // LED setup
     let led = Output::new(pins.led_pin, Level::Low, Speed::Low);
 
-    // Gyro setup
+    // ── Load config from flash (or use defaults) ──
+    let flight_config = flash::load_config_from_flash().unwrap_or_else(FlightConfig::new);
 
+    let config_ref: &'static Mutex<ThreadModeRawMutex, FlightConfig> =
+        CONFIG.init(Mutex::new(flight_config));
+
+    // Gyro setup
     let mut gyro_spi_config = spi::Config::default();
     gyro_spi_config.frequency = Hertz(24_000_000);
 
@@ -329,6 +411,15 @@ async fn main(spawner: Spawner) {
 
     let usb = builder.build();
 
+    // ── Flash peripheral for save task ──
+    // Note: The FLASH peripheral is consumed by the Peripherals struct.
+    // We need to create it from the raw peripheral.
+    // On embassy-stm32, Flash is created from the FLASH peripheral.
+    // Since BoardPins already consumed `p`, we access FLASH via unsafe steal.
+    let flash_peripheral = embassy_stm32::flash::Flash::new_blocking(unsafe {
+        embassy_stm32::Peripherals::steal().FLASH
+    });
+
     // Spawn tasks
     spawner.spawn(led_task(led)).unwrap();
     spawner
@@ -336,7 +427,11 @@ async fn main(spawner: Spawner) {
         .unwrap();
     spawner.spawn(reciever_task(uart1_rx, uart1_tx)).unwrap();
     spawner.spawn(usb_task(usb)).unwrap();
-    spawner.spawn(fsp_task()).unwrap();
+    spawner.spawn(fsp_task(config_ref)).unwrap();
+    spawner
+        .spawn(flash_save_task(flash_peripheral, config_ref))
+        .unwrap();
+    spawner.spawn(flight_control_task(config_ref)).unwrap();
 }
 
 // =================== CLOCK CONFIG ===================
