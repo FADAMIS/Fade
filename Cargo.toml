@@ -21,7 +21,7 @@ doctest = false
 
 [features]
 
-default = ["stm32h7"]
+default = ["stm32f"]
 
 stm32f = ["embassy-stm32/stm32f722ic"]
 stm32h7 = ["embassy-stm32/stm32h743ag"]

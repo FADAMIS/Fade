@@ -7,6 +7,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::mode::Async;
+#[cfg(feature = "stm32h7")]
 use embassy_stm32::spi;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usart;
@@ -14,23 +15,30 @@ use embassy_stm32::usart::Uart;
 use embassy_stm32::usb;
 use embassy_stm32::{bind_interrupts, init};
 use embassy_stm32::{peripherals, usb::Driver};
+#[cfg(feature = "stm32h7")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
+#[cfg(feature = "stm32h7")]
 use embassy_time::Delay;
 use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
 use fade::config::FlightConfig;
-use fade::dshot::{DShotManager, DShotSpeed};
+use fade::dshot::DShotManager;
+#[cfg(feature = "stm32h7")]
+use fade::dshot::DShotSpeed;
+#[cfg(feature = "stm32h7")]
 use fade::filters::GyroFilter;
 use fade::flash;
 use fade::flight_control::FlightController;
 use fade::fsp::{Fsp, SAVE_FLAG};
+#[cfg(feature = "stm32h7")]
 use fade::gyro::Icm42688Manager;
+#[cfg(feature = "stm32h7")]
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
 
@@ -54,6 +62,7 @@ static RC_CHANNEL: Channel<ThreadModeRawMutex, [u16; 16], 16> = Channel::new();
 static LINK_STATS_CHANNEL: Channel<ThreadModeRawMutex, u8, 4> = Channel::new();
 static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
+static ESC_CONNECTED: AtomicBool = AtomicBool::new(false);
 
 // =================== SHARED STATE ===================
 static CONFIG: StaticCell<Mutex<ThreadModeRawMutex, FlightConfig>> = StaticCell::new();
@@ -69,11 +78,17 @@ static SAVE_SIGNAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 #[embassy_executor::task]
 async fn led_task(mut led: Output<'static>) {
     loop {
+        // Fast blink (100ms) = ESCs connected, slow blink (500ms) = waiting
+        let period = if ESC_CONNECTED.load(Ordering::Relaxed) {
+            100
+        } else {
+            500
+        };
         let work = async {
             led.set_high();
-            Timer::after(Duration::from_millis(500)).await;
+            Timer::after(Duration::from_millis(period)).await;
             led.set_low();
-            Timer::after(Duration::from_millis(500)).await;
+            Timer::after(Duration::from_millis(period)).await;
         };
         match select(work, SHUTDOWN_SIGNAL.wait()).await {
             Either::First(_) => { /* did one blink cycle */ }
@@ -82,6 +97,7 @@ async fn led_task(mut led: Output<'static>) {
     }
 }
 
+#[cfg(feature = "stm32h7")]
 #[embassy_executor::task]
 async fn icm42688_task(
     mut gyro: Icm42688Manager<
@@ -288,6 +304,7 @@ async fn flight_control_task(
     // Initialize ESCs — send zero-throttle DShot frames for ~600ms
     // This allows ESCs to recognize DShot600 and confirm connection (2 beeps)
     fc.init_escs().await;
+    ESC_CONNECTED.store(true, Ordering::Relaxed);
 
     loop {
         // Wait for new gyro data with a timeout to prevent freezing
@@ -329,31 +346,35 @@ async fn main(spawner: Spawner) {
     let config_ref: &'static Mutex<ThreadModeRawMutex, FlightConfig> =
         CONFIG.init(Mutex::new(flight_config));
 
-    // Gyro setup
-    let mut gyro_spi_config = spi::Config::default();
-    gyro_spi_config.frequency = Hertz(24_000_000);
+    // Gyro setup (ICM42688 — H7 only)
+    #[cfg(feature = "stm32h7")]
+    let (icm42688_manager, gyro_filter) = {
+        let mut gyro_spi_config = spi::Config::default();
+        gyro_spi_config.frequency = Hertz(24_000_000);
 
-    static BUS: StaticCell<Mutex<NoopRawMutex, spi::Spi<embassy_stm32::mode::Async>>> =
-        StaticCell::new();
-    let bus = BUS.init(Mutex::new(spi::Spi::new(
-        pins.gyro_spi,
-        pins.gyro_sck,
-        pins.gyro_mosi,
-        pins.gyro_miso,
-        pins.gyro_tx_dma,
-        pins.gyro_rx_dma,
-        gyro_spi_config,
-    )));
+        static BUS: StaticCell<Mutex<NoopRawMutex, spi::Spi<embassy_stm32::mode::Async>>> =
+            StaticCell::new();
+        let bus = BUS.init(Mutex::new(spi::Spi::new(
+            pins.gyro_spi,
+            pins.gyro_sck,
+            pins.gyro_mosi,
+            pins.gyro_miso,
+            pins.gyro_tx_dma,
+            pins.gyro_rx_dma,
+            gyro_spi_config,
+        )));
 
-    let cs_pin = Output::new(pins.gyro_cs, Level::High, Speed::VeryHigh);
-    let spi_dev = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(bus, cs_pin);
+        let cs_pin = Output::new(pins.gyro_cs, Level::High, Speed::VeryHigh);
+        let spi_dev = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(bus, cs_pin);
 
-    let icm42688 = ICM42688::new(spi_dev);
-    let icm42688_manager = Icm42688Manager::new(icm42688, Delay).await.unwrap();
+        let icm42688 = ICM42688::new(spi_dev);
+        let icm42688_manager = Icm42688Manager::new(icm42688, Delay).await.unwrap();
 
-    // Gyro Filters setup
-    let mut gyro_filter = GyroFilter::new(8000.0);
-    gyro_filter.set_calibration_params(200, 2.0, 0.2, 100.0, 100.0);
+        let mut gyro_filter = GyroFilter::new(8000.0);
+        gyro_filter.set_calibration_params(200, 2.0, 0.2, 100.0, 100.0);
+
+        (icm42688_manager, gyro_filter)
+    };
 
     let mut uart_config = usart::Config::default();
     uart_config.baudrate = 420_000;
@@ -421,10 +442,6 @@ async fn main(spawner: Spawner) {
     let usb = builder.build();
 
     // ── Flash peripheral for save task ──
-    // Note: The FLASH peripheral is consumed by the Peripherals struct.
-    // We need to create it from the raw peripheral.
-    // On embassy-stm32, Flash is created from the FLASH peripheral.
-    // Since BoardPins already consumed `p`, we access FLASH via unsafe steal.
     let flash_peripheral = embassy_stm32::flash::Flash::new_blocking(unsafe {
         embassy_stm32::Peripherals::steal().FLASH
     });
@@ -445,6 +462,7 @@ async fn main(spawner: Spawner) {
 
     // Spawn tasks
     spawner.spawn(led_task(led)).unwrap();
+    #[cfg(feature = "stm32h7")]
     spawner
         .spawn(icm42688_task(icm42688_manager, gyro_filter))
         .unwrap();

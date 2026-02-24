@@ -16,7 +16,7 @@ use crate::config::FlightConfig;
 pub const CONFIG_FLASH_OFFSET: u32 = 0x000E0000; // Offset from flash base (0x08000000)
 
 #[cfg(feature = "stm32f")]
-pub const CONFIG_FLASH_OFFSET: u32 = 0x000E0000; // Offset from flash base (0x08000000)
+pub const CONFIG_FLASH_OFFSET: u32 = 0x0002_0000; // Sector 5 (last 128K of 256K F722 flash)
 
 pub const CONFIG_FLASH_BASE: u32 = 0x0800_0000;
 
