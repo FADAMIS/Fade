@@ -94,8 +94,12 @@ where
         D: embedded_hal_async::delay::DelayNs,
     {
         // Initialize using the library's method
+        let icm_config = icm426xx::Config {
+            rate: icm426xx::OutputDataRate::Hz8000,
+            ..icm426xx::Config::default()
+        };
         let mut sensor = sensor
-            .initialize(delay)
+            .initialize(delay, icm_config)
             .await
             .map_err(|_| "Failed to initialize sensor")?;
 
