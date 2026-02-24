@@ -28,20 +28,19 @@ fn panic() -> ! {
     cortex_m::asm::udf()
 }
 
-/// Terminates the application and makes a semihosting-capable debug tool exit
-/// with status code 0.
+/// Terminates the application by resetting the MCU.
+/// This is safe without a debug probe — semihosting would hang.
 pub fn exit() -> ! {
-    semihosting::process::exit(0);
+    cortex_m::peripheral::SCB::sys_reset();
 }
 
 /// Hardfault handler.
 ///
-/// Terminates the application and makes a semihosting-capable debug tool exit
-/// with an error. This seems better than the default, which is to spin in a
-/// loop.
+/// Resets the MCU so the FC recovers from crashes.
+/// Using semihosting here would hang when running from battery only.
 #[cortex_m_rt::exception]
 unsafe fn HardFault(_frame: &cortex_m_rt::ExceptionFrame) -> ! {
-    semihosting::process::exit(1);
+    cortex_m::peripheral::SCB::sys_reset();
 }
 
 // defmt-test 0.3.0 has the limitation that this `#[tests]` attribute can only be used

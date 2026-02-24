@@ -19,6 +19,13 @@ pub struct SequireH7V2Pins {
     pub uart1_rx: Peri<'static, PA10>,
     pub uart1_tx_dma: Peri<'static, DMA1_CH2>,
     pub uart1_rx_dma: Peri<'static, DMA1_CH3>,
+    // Motor pins — all on TIM3
+    pub motor_tim: Peri<'static, TIM3>,
+    pub motor1_pin: Peri<'static, PB4>,     // M1 = TIM3_CH1
+    pub motor2_pin: Peri<'static, PB5>,     // M2 = TIM3_CH2
+    pub motor3_pin: Peri<'static, PB0>,     // M3 = TIM3_CH3
+    pub motor4_pin: Peri<'static, PB1>,     // M4 = TIM3_CH4
+    pub motor_dma: Peri<'static, DMA1_CH4>, // TIM3_UP DMA channel
 }
 
 impl SequireH7V2Pins {
@@ -40,6 +47,12 @@ impl SequireH7V2Pins {
             uart1_rx: p.PA10,
             uart1_tx_dma: p.DMA1_CH2,
             uart1_rx_dma: p.DMA1_CH3,
+            motor_tim: p.TIM3,
+            motor1_pin: p.PB4,
+            motor2_pin: p.PB5,
+            motor3_pin: p.PB0,
+            motor4_pin: p.PB1,
+            motor_dma: p.DMA1_CH4,
         }
     }
 }

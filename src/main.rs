@@ -25,6 +25,7 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::{Builder, UsbDevice};
 use fade as _;
 use fade::config::FlightConfig;
+use fade::dshot::{DShotManager, DShotSpeed};
 use fade::filters::GyroFilter;
 use fade::flash;
 use fade::flight_control::FlightController;
@@ -222,7 +223,11 @@ async fn fsp_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
     loop {
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
-            class.read_packet(&mut buf).await.unwrap();
+            // Use .ok() instead of .unwrap() — USB read can fail if no host is connected
+            if class.read_packet(&mut buf).await.is_err() {
+                Timer::after(Duration::from_millis(100)).await;
+                continue;
+            }
 
             let res = {
                 let mut cfg = config.lock().await;
@@ -234,15 +239,18 @@ async fn fsp_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
                     // Check if this is a save-to-flash signal
                     if data[0] == SAVE_FLAG {
                         SAVE_SIGNAL.signal(());
-                        // Send ACK back to configurator
-                        class.write_packet(&[0x0A]).await.unwrap();
+                        // Send ACK back to configurator (ignore write errors)
+                        let _ = class.write_packet(&[0x0A]).await;
                     } else if data.len() == 1 {
-                        class.write_packet(&[data[0]]).await.unwrap();
+                        let _ = class.write_packet(&[data[0]]).await;
                     } else {
-                        class.write_packet(data.as_slice()).await.unwrap();
+                        let _ = class.write_packet(data.as_slice()).await;
                     }
                 }
             }
+        } else {
+            // CDC class not yet initialized, wait and retry
+            Timer::after(Duration::from_millis(100)).await;
         }
     }
 }
@@ -265,40 +273,41 @@ async fn flash_save_task(
     }
 }
 
-/// Flight control task — reads gyro + RC, runs PID, outputs DShot
+/// Flight control task — reads gyro + RC, runs PID, outputs DShot via DMA
 #[embassy_executor::task]
-async fn flight_control_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
+async fn flight_control_task(
+    config: &'static Mutex<ThreadModeRawMutex, FlightConfig>,
+    dshot: DShotManager,
+) {
     // Initialize flight controller from config
-    let fc = {
+    let mut fc = {
         let cfg = config.lock().await;
-        FlightController::new(&cfg)
+        FlightController::new(&cfg, dshot)
     };
 
-    // We need fc to be mutable, move it out
-    let mut fc = fc;
+    // Initialize ESCs — send zero-throttle DShot frames for ~600ms
+    // This allows ESCs to recognize DShot600 and confirm connection (2 beeps)
+    fc.init_escs().await;
 
     loop {
-        // Wait for new gyro data (runs at gyro rate ~8kHz)
-        let gyro_recv = async { GYRO_CHANNEL.receive().await };
+        // Wait for new gyro data with a timeout to prevent freezing
+        // if the gyro task stops sending data
+        let gyro_recv =
+            embassy_time::with_timeout(Duration::from_millis(10), GYRO_CHANNEL.receive());
 
         match select(gyro_recv, SHUTDOWN_SIGNAL.wait()).await {
-            Either::First(gyro_data) => {
+            Either::First(Ok(gyro_data)) => {
                 // Check for new RC data (non-blocking)
                 if let Ok(rc_data) = RC_CHANNEL.try_receive() {
                     fc.update_rc(rc_data);
                 }
 
-                // Run PID loop + mixer + DShot encode
-                let _dma_buffers = fc.update(gyro_data);
-
-                // TODO: Actually start DMA transfer to timer CCRs here.
-                // This requires the timer + DMA peripherals to be passed in.
-                // For now the DMA buffers are prepared and ready.
-                //
-                // Example (hardware-specific, needs real pin/timer setup):
-                // for (ch, buf) in dma_buffers.iter().enumerate() {
-                //     dma.start_transfer(timer.ccr(ch), buf);
-                // }
+                // Run PID loop + mixer → DShot DMA output
+                fc.update(gyro_data).await;
+            }
+            Either::First(Err(_timeout)) => {
+                // Gyro timeout — send zero throttle to keep ESCs alive
+                fc.update([0.0, 0.0, 0.0]).await;
             }
             Either::Second(_) => break,
         }
@@ -420,6 +429,20 @@ async fn main(spawner: Spawner) {
         embassy_stm32::Peripherals::steal().FLASH
     });
 
+    // ── DShot motor output setup (H7 only) ──
+    #[cfg(feature = "stm32h7")]
+    let dshot = DShotManager::new(
+        pins.motor_tim,
+        pins.motor1_pin,
+        pins.motor2_pin,
+        pins.motor3_pin,
+        pins.motor4_pin,
+        pins.motor_dma,
+        DShotSpeed::DShot600,
+    );
+    #[cfg(feature = "stm32f")]
+    let dshot = DShotManager::new_stub();
+
     // Spawn tasks
     spawner.spawn(led_task(led)).unwrap();
     spawner
@@ -431,7 +454,9 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(flash_save_task(flash_peripheral, config_ref))
         .unwrap();
-    spawner.spawn(flight_control_task(config_ref)).unwrap();
+    spawner
+        .spawn(flight_control_task(config_ref, dshot))
+        .unwrap();
 }
 
 // =================== CLOCK CONFIG ===================

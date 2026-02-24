@@ -4,7 +4,7 @@
 // runs the PID controllers, mixes outputs, and writes DShot frames.
 
 use crate::config::FlightConfig;
-use crate::dshot::{DShotManager, DShotSpeed};
+use crate::dshot::DShotManager;
 use crate::mixer::mix_motors;
 use crate::pid::{PidControllers, Vector3};
 
@@ -71,14 +71,14 @@ pub fn rc_to_setpoints(rc_channels: &[u16; 16]) -> (Vector3, f32) {
 pub struct FlightController {
     pid: PidControllers,
     dshot: DShotManager,
-    dma_buffers: [[u32; 18]; 4],
     armed: bool,
     last_rc: [u16; 16],
 }
 
 impl FlightController {
     /// Create a new flight controller with config-derived PID gains
-    pub fn new(config: &FlightConfig) -> Self {
+    /// and a pre-configured DShot manager for hardware output.
+    pub fn new(config: &FlightConfig, dshot: DShotManager) -> Self {
         // Create PID controllers at gyro sample rate (8kHz)
         let mut pid = PidControllers::new(8000.0);
 
@@ -91,21 +91,9 @@ impl FlightController {
         // Set output limits
         pid.set_output_limits(500.0);
 
-        // Create DShot600 manager
-        // Timer frequency depends on the platform:
-        // H743: APB2 timer clock = 192 MHz (after prescaler)
-        // F722: APB2 timer clock = 216 MHz
-        #[cfg(feature = "stm32h7")]
-        let timer_freq = 192_000_000u32;
-        #[cfg(feature = "stm32f")]
-        let timer_freq = 216_000_000u32;
-
-        let dshot = DShotManager::new(DShotSpeed::DShot600, timer_freq);
-
         Self {
             pid,
             dshot,
-            dma_buffers: [[0u32; 18]; 4],
             armed: false,
             last_rc: [CRSF_CHANNEL_MID; 16],
         }
@@ -117,18 +105,15 @@ impl FlightController {
         self.armed = is_armed(&self.last_rc);
     }
 
-    /// Run one iteration of the PID loop.
+    /// Run one iteration of the PID loop and send motor commands via DShot.
     ///
     /// `gyro_data` is [roll_rate, pitch_rate, yaw_rate] in deg/s from the filtered gyro.
-    ///
-    /// Returns the DMA buffers ready to be sent to the timer/DMA hardware.
-    pub fn update(&mut self, gyro_data: [f32; 3]) -> &[[u32; 18]; 4] {
+    pub async fn update(&mut self, gyro_data: [f32; 3]) {
         if !self.armed {
             // Send zero throttle (disarmed) — DShot value 0 = motor stop
             self.pid.reset();
-            self.dshot
-                .write_throttles([0, 0, 0, 0], &mut self.dma_buffers);
-            return &self.dma_buffers;
+            self.dshot.write_throttles([0, 0, 0, 0]).await;
+            return;
         }
 
         // Convert RC to setpoints
@@ -151,11 +136,15 @@ impl FlightController {
         // Mix into motor outputs
         let motor_outputs = mix_motors(base_throttle, pid_output.x, pid_output.y, pid_output.z);
 
-        // Encode to DShot frames
-        self.dshot
-            .write_throttles(motor_outputs, &mut self.dma_buffers);
+        // Send to ESCs via DShot DMA
+        self.dshot.write_throttles(motor_outputs).await;
+    }
 
-        &self.dma_buffers
+    /// Initialize ESCs by sending zero-throttle DShot frames for ~600ms.
+    /// Must be called before the main control loop so ESCs recognize the
+    /// DShot600 signal and confirm connection with 2 beeps.
+    pub async fn init_escs(&mut self) {
+        self.dshot.init_escs().await;
     }
 
     /// Get mutable reference to PID controllers (for config updates)
@@ -163,13 +152,14 @@ impl FlightController {
         &mut self.pid
     }
 
-    /// Get reference to the DMA buffers
-    pub fn dma_buffers(&self) -> &[[u32; 18]; 4] {
-        &self.dma_buffers
-    }
-
     /// Check if armed
     pub fn is_armed(&self) -> bool {
         self.armed
+    }
+
+    /// Get latest eRPM period readings (µs) for all 4 motors.
+    /// Returns `None` for motors without valid telemetry data.
+    pub fn erpm(&self) -> [Option<u32>; 4] {
+        self.dshot.get_erpm()
     }
 }
