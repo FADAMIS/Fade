@@ -10,13 +10,6 @@
 
 #![allow(dead_code)]
 
-use embassy_stm32::peripherals;
-use embassy_stm32::time::Hertz;
-use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
-use embassy_stm32::timer::Channel;
-use embassy_stm32::Peri;
-use embassy_time::{Duration, Timer};
-
 #[cfg(feature = "stm32h7")]
 use embassy_stm32::gpio::OutputType;
 
