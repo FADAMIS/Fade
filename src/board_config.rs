@@ -26,6 +26,14 @@ pub struct SequireH7V2Pins {
     pub motor3_pin: Peri<'static, PB0>,     // M3 = TIM3_CH3
     pub motor4_pin: Peri<'static, PB1>,     // M4 = TIM3_CH4
     pub motor_dma: Peri<'static, DMA1_CH4>, // TIM3_UP DMA channel
+    // External flash (W25Q128FV) on SPI3
+    pub flash_spi: Peri<'static, SPI3>,
+    pub flash_sck: Peri<'static, PC10>,
+    pub flash_mosi: Peri<'static, PC12>,
+    pub flash_miso: Peri<'static, PC11>,
+    pub flash_cs: Peri<'static, PA15>,
+    pub flash_tx_dma: Peri<'static, DMA1_CH5>,
+    pub flash_rx_dma: Peri<'static, DMA1_CH6>,
 }
 
 impl SequireH7V2Pins {
@@ -53,6 +61,13 @@ impl SequireH7V2Pins {
             motor3_pin: p.PB0,
             motor4_pin: p.PB1,
             motor_dma: p.DMA1_CH4,
+            flash_spi: p.SPI3,
+            flash_sck: p.PC10,
+            flash_mosi: p.PC12,
+            flash_miso: p.PC11,
+            flash_cs: p.PA15,
+            flash_tx_dma: p.DMA1_CH5,
+            flash_rx_dma: p.DMA1_CH6,
         }
     }
 }
@@ -74,6 +89,14 @@ pub struct HGLRCF722Pins {
     pub uart1_rx: Peri<'static, PA10>,
     pub uart1_tx_dma: Peri<'static, DMA2_CH7>,
     pub uart1_rx_dma: Peri<'static, DMA2_CH2>,
+    // External flash (W25Q128FV) on SPI3
+    pub flash_spi: Peri<'static, SPI3>,
+    pub flash_sck: Peri<'static, PC10>,
+    pub flash_mosi: Peri<'static, PC12>,
+    pub flash_miso: Peri<'static, PC11>,
+    pub flash_cs: Peri<'static, PD2>,
+    pub flash_tx_dma: Peri<'static, DMA1_CH5>,
+    pub flash_rx_dma: Peri<'static, DMA1_CH0>,
 }
 
 impl HGLRCF722Pins {
@@ -95,6 +118,13 @@ impl HGLRCF722Pins {
             uart1_rx: p.PA10,
             uart1_tx_dma: p.DMA2_CH7,
             uart1_rx_dma: p.DMA2_CH2,
+            flash_spi: p.SPI3,
+            flash_sck: p.PC10,
+            flash_mosi: p.PC12,
+            flash_miso: p.PC11,
+            flash_cs: p.PD2,
+            flash_tx_dma: p.DMA1_CH5,
+            flash_rx_dma: p.DMA1_CH0,
         }
     }
 }

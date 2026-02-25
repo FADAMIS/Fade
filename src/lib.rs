@@ -11,6 +11,7 @@ pub mod fsp;
 pub mod gyro;
 pub mod mixer;
 pub mod pid;
+pub mod w25q;
 
 use embassy_stm32 as _;
 

@@ -33,11 +33,11 @@ use fade::dshot::DShotManager;
 use fade::dshot::DShotSpeed;
 #[cfg(feature = "stm32h7")]
 use fade::filters::GyroFilter;
-use fade::flash;
 use fade::flight_control::FlightController;
 use fade::fsp::{Fsp, SAVE_FLAG};
 #[cfg(feature = "stm32h7")]
 use fade::gyro::Icm42688Manager;
+use fade::w25q::W25q;
 #[cfg(feature = "stm32h7")]
 use icm426xx::ICM42688;
 use static_cell::StaticCell;
@@ -234,49 +234,45 @@ async fn usb_task(mut usb: UsbDevice<'static, Driver<'static, peripherals::USB_O
 #[embassy_executor::task]
 async fn fsp_task(config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
     let mut fsp = Fsp::new();
-    let mut buf = [0u8; 1];
+    let mut buf = [0u8; 64];
     Timer::after(Duration::from_secs(1)).await;
     loop {
         #[allow(static_mut_refs)]
         if let Some(class) = unsafe { CDC_CLASS.as_mut() } {
-            // Use .ok() instead of .unwrap() — USB read can fail if no host is connected
-            if class.read_packet(&mut buf).await.is_err() {
-                Timer::after(Duration::from_millis(100)).await;
-                continue;
-            }
-
-            let res = {
-                let mut cfg = config.lock().await;
-                fsp.parse(buf[0], &mut cfg)
+            let n = match class.read_packet(&mut buf).await {
+                Ok(n) => n,
+                Err(_) => {
+                    Timer::after(Duration::from_millis(100)).await;
+                    continue;
+                }
             };
 
-            if let Some(ref data) = res {
-                if !data.is_empty() {
-                    // Check if this is a save-to-flash signal
-                    if data[0] == SAVE_FLAG {
-                        SAVE_SIGNAL.signal(());
-                        // Send ACK back to configurator (ignore write errors)
-                        let _ = class.write_packet(&[0x0A]).await;
-                    } else if data.len() == 1 {
-                        let _ = class.write_packet(&[data[0]]).await;
-                    } else {
-                        let _ = class.write_packet(data.as_slice()).await;
+            for &byte in &buf[..n] {
+                let res = {
+                    let mut cfg = config.lock().await;
+                    fsp.parse(byte, &mut cfg)
+                };
+
+                if let Some(ref data) = res {
+                    if !data.is_empty() {
+                        if data[0] == SAVE_FLAG {
+                            SAVE_SIGNAL.signal(());
+                            let _ = class.write_packet(&[0x0A]).await;
+                        } else {
+                            let _ = class.write_packet(data.as_slice()).await;
+                        }
                     }
                 }
             }
         } else {
-            // CDC class not yet initialized, wait and retry
             Timer::after(Duration::from_millis(100)).await;
         }
     }
 }
 
-/// Flash save task — waits for a save signal, then writes config to flash
+/// Flash save task — W25Q128FV external SPI flash
 #[embassy_executor::task]
-async fn flash_save_task(
-    mut flash_peripheral: embassy_stm32::flash::Flash<'static, embassy_stm32::flash::Blocking>,
-    config: &'static Mutex<ThreadModeRawMutex, FlightConfig>,
-) {
+async fn w25q_save_task(mut w25q: W25q, config: &'static Mutex<ThreadModeRawMutex, FlightConfig>) {
     loop {
         SAVE_SIGNAL.wait().await;
 
@@ -285,7 +281,14 @@ async fn flash_save_task(
             cfg_lock.clone()
         };
 
-        let _ = flash::save_config_to_flash(&mut flash_peripheral, &cfg);
+        let bytes = cfg.to_bytes();
+        // Pad to 4-byte alignment for flash write
+        let aligned_len = (bytes.len() + 3) & !3;
+        let mut buf = [0xFFu8; 512];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        let _ = w25q
+            .erase_and_write(fade::w25q::CONFIG_ADDR, &buf[..aligned_len])
+            .await;
     }
 }
 
@@ -340,8 +343,37 @@ async fn main(spawner: Spawner) {
     // LED setup
     let led = Output::new(pins.led_pin, Level::Low, Speed::Low);
 
-    // ── Load config from flash (or use defaults) ──
-    let flight_config = flash::load_config_from_flash().unwrap_or_else(FlightConfig::new);
+    // ── External flash setup (W25Q128FV on SPI3) ──
+    let mut w25q = {
+        let mut flash_spi_config = embassy_stm32::spi::Config::default();
+        flash_spi_config.frequency = Hertz(8_000_000);
+        let flash_spi = embassy_stm32::spi::Spi::new(
+            pins.flash_spi,
+            pins.flash_sck,
+            pins.flash_mosi,
+            pins.flash_miso,
+            pins.flash_tx_dma,
+            pins.flash_rx_dma,
+            flash_spi_config,
+        );
+        let flash_cs = Output::new(pins.flash_cs, Level::High, Speed::VeryHigh);
+        W25q::new(flash_spi, flash_cs)
+    };
+
+    // ── Load config from W25Q flash (or use defaults) ──
+    let flight_config = {
+        let mut buf = [0u8; 512];
+        let size = FlightConfig::size();
+        if w25q
+            .read(fade::w25q::CONFIG_ADDR, &mut buf[..size])
+            .await
+            .is_ok()
+        {
+            FlightConfig::from_bytes(&buf[..size]).unwrap_or_else(FlightConfig::new)
+        } else {
+            FlightConfig::new()
+        }
+    };
 
     let config_ref: &'static Mutex<ThreadModeRawMutex, FlightConfig> =
         CONFIG.init(Mutex::new(flight_config));
@@ -441,11 +473,6 @@ async fn main(spawner: Spawner) {
 
     let usb = builder.build();
 
-    // ── Flash peripheral for save task ──
-    let flash_peripheral = embassy_stm32::flash::Flash::new_blocking(unsafe {
-        embassy_stm32::Peripherals::steal().FLASH
-    });
-
     // ── DShot motor output setup (H7 only) ──
     #[cfg(feature = "stm32h7")]
     let dshot = DShotManager::new(
@@ -469,9 +496,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(reciever_task(uart1_rx, uart1_tx)).unwrap();
     spawner.spawn(usb_task(usb)).unwrap();
     spawner.spawn(fsp_task(config_ref)).unwrap();
-    spawner
-        .spawn(flash_save_task(flash_peripheral, config_ref))
-        .unwrap();
+    spawner.spawn(w25q_save_task(w25q, config_ref)).unwrap();
     spawner
         .spawn(flight_control_task(config_ref, dshot))
         .unwrap();
