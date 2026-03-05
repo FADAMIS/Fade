@@ -57,16 +57,15 @@ def get_value(ser, key):
     # 2) Send KEY (u16 BE + checksum)
     kd = struct.pack(">H", key)
     ser.write(kd + bytes([xor_cs(kd)]))
-    time.sleep(0.02)
-    # 3) Read ACK + f32 (5 bytes)
+    # 3) Read ACK for key
+    r = ser.read(1)
+    if not r or r[0] != ACK:
+        raise ValueError(f"GET key {key}: expected ACK, got {r!r}")
+    # 4) Read value (f32 BE) + checksum (5 bytes total)
     r = ser.read(5)
-    if len(r) < 1:
-        raise TimeoutError("No GET response")
-    if r[0] != ACK:
-        raise ValueError(f"GET key {key}: got 0x{r[0]:02X} instead of ACK")
     if len(r) < 5:
         raise TimeoutError(f"Incomplete GET response: {len(r)} bytes")
-    return struct.unpack(">f", r[1:5])[0]
+    return struct.unpack(">f", r[:4])[0]
 
 
 def set_value(ser, key, value):

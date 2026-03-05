@@ -169,15 +169,20 @@ impl Fsp {
         v
     }
 
-    /// Build GET response: ACK + f32 big-endian, or NACK for unknown key
+    /// Build GET response: ACK + f32 big-endian + XOR checksum (6 bytes total)
+    /// Configurator reads: waitForAck(1 byte) + readFull(5 bytes with checksum)
     fn make_get_response(&self, config: &FlightConfig) -> Vec<u8, 8> {
         let mut resp: Vec<u8, 8> = Vec::new();
 
         if let Some(value) = self.get_value(self.key, config) {
             let _ = resp.push(ACK);
-            for b in value.to_be_bytes() {
+            let bytes = value.to_be_bytes();
+            let mut cs: u8 = 0;
+            for b in bytes {
                 let _ = resp.push(b);
+                cs ^= b;
             }
+            let _ = resp.push(cs);
         } else {
             let _ = resp.push(NACK);
         }

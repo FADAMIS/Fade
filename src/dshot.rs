@@ -12,9 +12,20 @@
 
 #[cfg(feature = "stm32h7")]
 use embassy_stm32::gpio::OutputType;
-
+#[cfg(feature = "stm32h7")]
+use embassy_stm32::peripherals;
+#[cfg(feature = "stm32h7")]
+use embassy_stm32::time::Hertz;
 #[cfg(feature = "stm32h7")]
 use embassy_stm32::timer::low_level::CountingMode;
+#[cfg(feature = "stm32h7")]
+use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
+#[cfg(feature = "stm32h7")]
+use embassy_stm32::timer::Channel;
+#[cfg(feature = "stm32h7")]
+use embassy_stm32::Peri;
+#[cfg(feature = "stm32h7")]
+use embassy_time::{Duration, Timer};
 
 /// Number of bits in a DShot frame
 const DSHOT_FRAME_BITS: usize = 16;
